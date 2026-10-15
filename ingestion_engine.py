@@ -1,76 +1,158 @@
 import requests
 import pandas as pd
 from sqlalchemy import create_engine, text
-from apscheduler.schedulers.blocking import BlockingScheduler
+import time
+from datetime import datetime, timedelta
 
-# Połączenie z bazą danych PostgreSQL
 DB_URL = "postgresql+psycopg2://admin:rootpassword@db:5432/przetargi_db"
 engine = create_engine(DB_URL)
 
+def inicjalizuj_baze():
+    """Tworzy tabele do komunikacji między GUI a Workerem, jeśli nie istnieją."""
+    with engine.connect() as conn:
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS app_settings (
+                id SERIAL PRIMARY KEY,
+                worker_status VARCHAR(20) DEFAULT 'stopped',
+                run_interval INT DEFAULT 60,
+                last_run TIMESTAMP
+            )
+        """))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS worker_logs (
+                id SERIAL PRIMARY KEY,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                message TEXT
+            )
+        """))
+        
+        # Inicjalizacja domyślnych ustawień (tylko pierwszy wiersz)
+        wynik = conn.execute(text("SELECT COUNT(*) FROM app_settings")).scalar()
+        if wynik == 0:
+            conn.execute(text("INSERT INTO app_settings (id, worker_status, run_interval) VALUES (1, 'stopped', 60)"))
+        conn.commit()
+
+def log_msg(wiadomosc):
+    """Zapisuje log jednocześnie w konsoli Dockera i w bazie (dla mini-konsoli w GUI)"""
+    teraz = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    pelny_msg = f"[{teraz}] {wiadomosc}"
+    print(pelny_msg)
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("INSERT INTO worker_logs (message) VALUES (:m)"), {"m": wiadomosc})
+            conn.commit()
+    except Exception as e:
+        print(f"Błąd zapisu logu: {e}")
+
 def pobierz_konfiguracje():
-    """Odczytuje aktualne endpointy i słowa kluczowe z bazy danych"""
     with engine.connect() as conn:
         endpoints_df = pd.read_sql("SELECT * FROM endpoints WHERE status = 'Aktywny'", conn)
         keywords_df = pd.read_sql("SELECT * FROM keywords WHERE category = 'Pożądane'", conn)
     return endpoints_df, keywords_df
 
 def uruchom_pobieranie():
-    print("🚀 Uruchamiam Ingestion Engine...")
+    log_msg("🚀 Rozpoczynam cykl pobierania danych...")
     endpoints, keywords = pobierz_konfiguracje()
     
     if endpoints.empty:
-        print("Brak aktywnych endpointów w bazie. Przerywam pracę.")
+        log_msg("⚠️ Brak aktywnych endpointów. Przerywam.")
         return
         
-    # Pobieramy słowa i zamieniamy na małe litery, żeby łatwiej było szukać
     lista_slow = [slowo.lower() for slowo in keywords['word'].tolist()]
-    print(f"🎯 Szukam przetargów zawierających słowa: {lista_slow}")
+    log_msg(f"🎯 Szukane słowa: {lista_slow}")
     
     for index, row in endpoints.iterrows():
         nazwa = row['name']
         url = row['url']
         typ = row['type']
         
-        print(f"\n📡 Przeszukuję źródło: {nazwa} ({url})")
+        log_msg(f"📡 Źródło: {nazwa}")
         
         try:
             if "API" in typ:
-                response = requests.get(url, timeout=15)
-                response.raise_for_status() # Wyrzuca błąd jeśli status to np. 404 lub 500
+                naglowki = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "Accept": "application/json"
+                }
+                
+                response = requests.get(url, headers=naglowki, timeout=15)
+                response.raise_for_status() 
                 dane = response.json()
                 
-                # API e-Zamówień zwraca wyniki w różnej formie, często pod kluczem 'data' lub 'results'
-                elementy = dane if isinstance(dane, list) else dane.get('data', dane.get('results', []))
+                elementy = dane if isinstance(dane, list) else []
                 znalezione = 0
                 
                 for ogloszenie in elementy:
-                    # Wyciągamy tytuł/opis z JSONa (dostosuj klucz 'orderTitle' jeśli Twoje API używa innej nazwy)
-                    tytul = str(ogloszenie.get('orderTitle', ogloszenie.get('title', ''))).lower()
+                    tytul = str(ogloszenie.get('orderObject', '')).lower()
                     
-                    if any(slowo in tytul for slowo in lista_slow):
+                    if tytul and any(slowo in tytul for slowo in lista_slow):
                         znalezione += 1
-                        print(f"✅ Trafienie: {tytul[:80]}...")
-                        # Docelowo tutaj dodasz zapis tego ogłoszenia do bazy danych
+                        try:
+                            with engine.connect() as conn_insert:
+                                # Sprawdzamy czy nie ma już takiego tytułu by uniknąć duplikatów
+                                exists = conn_insert.execute(
+                                    text("SELECT 1 FROM tenders WHERE title = :t LIMIT 1"), {"t": tytul}
+                                ).scalar()
+                                
+                                if not exists:
+                                    conn_insert.execute(
+                                        text("INSERT INTO tenders (title, source_name) VALUES (:t, :s)"), 
+                                        {"t": tytul, "s": nazwa}
+                                    )
+                                    conn_insert.commit()
+                        except Exception as ex:
+                            log_msg(f"❌ Błąd zapisu SQL: {ex}")
                         
-                print(f"📊 Zakończono. Trafienia w tym źródle: {znalezione}")
+                log_msg(f"✅ Znaleziono pasujących ogłoszeń: {znalezione}")
                 
             else:
-                print("🛠️ To źródło wymaga web scrapingu (HTML) - do zaimplementowania.")
+                log_msg("🛠️ Źródło HTML pominięte (brak implementacji).")
                 
         except Exception as e:
-            print(f"❌ Błąd podczas pobierania z {nazwa}: {e}")
+            log_msg(f"❌ Błąd pobierania {nazwa}: {e}")
+            
+    log_msg("🏁 Cykl zakończony.")
 
 if __name__ == "__main__":
-    print("🕒 Startuję harmonogram APScheduler...")
-    scheduler = BlockingScheduler()
+    print("🕒 Oczekiwane na gotowość bazy danych...")
+    for i in range(10):
+        try:
+            with engine.connect():
+                print("✅ Baza gotowa!")
+                break
+        except Exception:
+            time.sleep(3)
+
+    inicjalizuj_baze()
     
-    # Odpalamy raz od razu przy uruchomieniu
-    uruchom_pobieranie()
-    
-    # Następnie ustawiamy cykliczne uruchamianie, np. co 60 minut (do testów możesz wpisać minutes=1)
-    scheduler.add_job(uruchom_pobieranie, 'interval', minutes=60)
-    
+    # Wymuszamy natychmiastowe uruchomienie cyklu po włączeniu kontenera
     try:
-        scheduler.start()
-    except (KeyboardInterrupt, SystemExit):
-        print("Zatrzymano harmonogram.")
+        with engine.connect() as conn:
+            conn.execute(text("UPDATE app_settings SET worker_status = 'running', last_run = NULL WHERE id = 1"))
+            conn.commit()
+    except Exception as e:
+        print(f"Błąd resetu ustawień: {e}")
+
+    log_msg("🤖 Skrypt w gotowości. Wykonuję natychmiastowe pierwsze sprawdzanie...")
+
+    while True:
+        try:
+            with engine.connect() as conn:
+                wynik = conn.execute(text("SELECT worker_status, run_interval, last_run FROM app_settings WHERE id = 1")).fetchone()
+                status, interval_min, last_run = wynik
+                
+                if status == 'running':
+                    teraz = datetime.now()
+                    # Uruchom jeśli to pierwszy raz po włączeniu, lub minął interwał
+                    if last_run is None or teraz >= (last_run + timedelta(minutes=interval_min)):
+                        uruchom_pobieranie()
+                        
+                        # Aktualizujemy czas OSTATNIEGO wykonania
+                        conn.execute(text("UPDATE app_settings SET last_run = :now WHERE id = 1"), {"now": datetime.now()})
+                        conn.commit()
+                        
+        except Exception as e:
+            print(f"Błąd głównej pętli: {e}")
+            
+        # Krótsza drzemka dla szybszej reakcji przycisków w GUI
+        time.sleep(5)
