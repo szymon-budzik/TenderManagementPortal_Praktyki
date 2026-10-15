@@ -1,136 +1,76 @@
 import requests
-from bs4 import BeautifulSoup
-from datetime import datetime
-from apscheduler.schedulers.blocking import BlockingScheduler 
+import pandas as pd
+from sqlalchemy import create_engine, text
+from apscheduler.schedulers.blocking import BlockingScheduler
 
-# ==========================================
-# MODUŁ 1: NORMALIZATOR I WALIDATOR
-# ==========================================
+# Połączenie z bazą danych PostgreSQL
+DB_URL = "postgresql+psycopg2://admin:rootpassword@db:5432/przetargi_db"
+engine = create_engine(DB_URL)
 
-def clean_html_content(raw_html):
-    """
-    Usuwa wszelkie znaczniki HTML z tekstu (np. <p>, <b>).
-    Zgodnie z założeniami projektu, przygotowuje czysty tekst dla Javy.
-    """
-    if not raw_html:
-        return ""
-    # BeautifulSoup analizuje kod HTML i wyciąga z niego tylko czysty tekst
-    soup = BeautifulSoup(raw_html, "html.parser")
-    return soup.get_text(separator=" ", strip=True)
+def pobierz_konfiguracje():
+    """Odczytuje aktualne endpointy i słowa kluczowe z bazy danych"""
+    with engine.connect() as conn:
+        endpoints_df = pd.read_sql("SELECT * FROM endpoints WHERE status = 'Aktywny'", conn)
+        keywords_df = pd.read_sql("SELECT * FROM keywords WHERE category = 'Pożądane'", conn)
+    return endpoints_df, keywords_df
 
-def normalize_tender_data(raw_tender):
-    """
-    Przekształca surowe dane z zewnętrznego API (np. dane.gov.pl) 
-    do ujednoliconego formatu JSON.
-    """
-    # Pobieramy dane z surowego rekordu (używamy .get(), by uniknąć błędu, gdy brakuje klucza)
-    raw_title = raw_tender.get('title', 'Brak tytułu')
-    raw_description = raw_tender.get('description', '') 
+def uruchom_pobieranie():
+    print("🚀 Uruchamiam Ingestion Engine...")
+    endpoints, keywords = pobierz_konfiguracje()
     
-    # Oczyszczamy opis ze zbędnego kodu HTML
-    clean_description = clean_html_content(raw_description)
-    
-    # Zwracamy słownik o stałej, przewidywalnej strukturze
-    return {
-        "externalId": raw_tender.get('id'),
-        "title": raw_title,
-        "description": clean_description,
-        "source": "dane.gov.pl",
-        # Dodajemy aktualną datę pobrania w standardowym formacie ISO
-        "ingestedAt": datetime.now().isoformat() 
-    }
-
-# ==========================================
-# MODUŁ 2: KOMUNIKACJA Z BACKENDEM (JAVA)
-# ==========================================
-
-def send_to_java_backend(payload):
-    """
-    Wysyła oczyszczony i znormalizowany pakiet danych (payload) do Javy
-    poprzez wewnętrzny endpoint POST.
-    """
-    # Adres docelowy aplikacji w Javie (zgodnie z dokumentacją)
-    java_api_url = "http://localhost:8080/api/internal/tenders"
-    
-    print(f"\n[WYSYŁANIE] Przekazuję dane do Javy: {java_api_url}...")
-    
-    try:
-        # json=payload automatycznie konwertuje słownik na format JSON i wysyła go metodą POST
-        response = requests.post(java_api_url, json=payload)
+    if endpoints.empty:
+        print("Brak aktywnych endpointów w bazie. Przerywam pracę.")
+        return
         
-        # Wyrzuca błąd, jeśli Java odpowie kodem błędu HTTP (np. 404, 500)
-        response.raise_for_status() 
-        
-        print(f"[SUKCES] Java poprawnie odebrała dane (Kod: {response.status_code})")
-        
-    except requests.exceptions.ConnectionError:
-        # Ten błąd wystąpi, dopóki Twój kolega z zespołu nie uruchomi serwera Spring Boot
-        print("[BŁĄD POŁĄCZENIA] Serwer Java nie odpowiada. Wymagane uruchomienie backendu Javy!")
-    except requests.exceptions.RequestException as e:
-        # Przechwytuje inne nieoczekiwane błędy sieciowe
-        print(f"[INNY BŁĄD] Wystąpił problem podczas wysyłania: {e}")
-
-# ==========================================
-# MODUŁ 3: POBIERANIE DANYCH (INGESTION)
-# ==========================================
-
-def fetch_test_data():
-    """
-    Główna funkcja wykonująca jeden pełny cykl operacyjny:
-    1. Pobiera dane z publicznego API.
-    2. Normalizuje rekord.
-    3. Wysyła go do Javy.
-    """
-    print(f"\n--- NOWY CYKL [{datetime.now().strftime('%H:%M:%S')}] ---")
+    # Pobieramy słowa i zamieniamy na małe litery, żeby łatwiej było szukać
+    lista_slow = [slowo.lower() for slowo in keywords['word'].tolist()]
+    print(f"🎯 Szukam przetargów zawierających słowa: {lista_slow}")
     
-    # Testowy adres API
-    url = "https://api.dane.gov.pl/1.4/datasets"
-    
-    try:
-        # Zapytanie GET do publicznego serwera
-        response = requests.get(url)
-        response.raise_for_status()
+    for index, row in endpoints.iterrows():
+        nazwa = row['name']
+        url = row['url']
+        typ = row['type']
         
-        # Odczytujemy odpowiedź jako słownik (JSON)
-        data = response.json()
+        print(f"\n📡 Przeszukuję źródło: {nazwa} ({url})")
         
-        # Sprawdzamy, czy struktura zawiera dane i czy lista nie jest pusta
-        if 'data' in data and len(data['data']) > 0:
-            first_item = data['data'][0] # Pobieramy testowo tylko pierwszy element
-            
-            # Etap 1: Czyszczenie danych (Normalizator)
-            processed_item = normalize_tender_data(first_item)
-            
-            # Etap 2: Wysłanie paczki danych do Javy
-            send_to_java_backend(processed_item)
-            
-    except requests.exceptions.RequestException as e:
-        print(f"[BŁĄD API] Nie udało się pobrać danych z zewnętrznego źródła: {e}")
-
-# ==========================================
-# PUNKT STARTOWY APLIKACJI I HARMONOGRAM
-# ==========================================
+        try:
+            if "API" in typ:
+                response = requests.get(url, timeout=15)
+                response.raise_for_status() # Wyrzuca błąd jeśli status to np. 404 lub 500
+                dane = response.json()
+                
+                # API e-Zamówień zwraca wyniki w różnej formie, często pod kluczem 'data' lub 'results'
+                elementy = dane if isinstance(dane, list) else dane.get('data', dane.get('results', []))
+                znalezione = 0
+                
+                for ogloszenie in elementy:
+                    # Wyciągamy tytuł/opis z JSONa (dostosuj klucz 'orderTitle' jeśli Twoje API używa innej nazwy)
+                    tytul = str(ogloszenie.get('orderTitle', ogloszenie.get('title', ''))).lower()
+                    
+                    if any(slowo in tytul for slowo in lista_slow):
+                        znalezione += 1
+                        print(f"✅ Trafienie: {tytul[:80]}...")
+                        # Docelowo tutaj dodasz zapis tego ogłoszenia do bazy danych
+                        
+                print(f"📊 Zakończono. Trafienia w tym źródle: {znalezione}")
+                
+            else:
+                print("🛠️ To źródło wymaga web scrapingu (HTML) - do zaimplementowania.")
+                
+        except Exception as e:
+            print(f"❌ Błąd podczas pobierania z {nazwa}: {e}")
 
 if __name__ == "__main__":
-    print("Inicjalizacja Modułu Ingestion Engine (Python)...")
-    
-    # Tworzymy obiekt harmonogramu, który będzie utrzymywał skrypt przy życiu (nieskończona pętla)
+    print("🕒 Startuję harmonogram APScheduler...")
     scheduler = BlockingScheduler()
     
-    # Konfigurujemy zadanie: wywołaj funkcję `fetch_test_data` dokładnie co 10 sekund
-    # Do testów 10 sekund, na produkcji zmienisz to np. na: hours=3 lub minutes=30
-    scheduler.add_job(fetch_test_data, 'interval', seconds=10)
+    # Odpalamy raz od razu przy uruchomieniu
+    uruchom_pobieranie()
     
-    # Wywołujemy pierwszy cykl ręcznie, żeby nie czekać na start pierwszych 10 sekund
-    fetch_test_data()
+    # Następnie ustawiamy cykliczne uruchamianie, np. co 60 minut (do testów możesz wpisać minutes=1)
+    scheduler.add_job(uruchom_pobieranie, 'interval', minutes=60)
     
     try:
-        print("\nUruchamiam harmonogram działania w tle...")
-        print("Aby zatrzymać skrypt, kliknij w to okno i wciśnij skrót klawiszowy: Ctrl+C")
-        
-        # Uruchamiamy pętlę harmonogramu - skrypt czeka na kolejne wywołania czasowe
         scheduler.start()
-        
     except (KeyboardInterrupt, SystemExit):
-        # Czyste zamknięcie aplikacji po wciśnięciu Ctrl+C przez użytkownika
-        print("\nZatrzymano działanie skryptu.")
+        print("Zatrzymano harmonogram.")

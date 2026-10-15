@@ -3,3 +3,5 @@ apscheduler
 beautifulsoup4
 pandas
 streamlit
+psycopg2-binary
+SQLAlchemy
