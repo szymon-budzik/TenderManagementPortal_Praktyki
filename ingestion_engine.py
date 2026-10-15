@@ -81,6 +81,7 @@ def uruchom_pobieranie():
                 
                 elementy = dane if isinstance(dane, list) else []
                 znalezione = 0
+                nowe_dodane = 0
                 
                 for ogloszenie in elementy:
                     tytul = str(ogloszenie.get('orderObject', '')).lower()
@@ -89,7 +90,6 @@ def uruchom_pobieranie():
                         znalezione += 1
                         try:
                             with engine.connect() as conn_insert:
-                                # Sprawdzamy czy nie ma już takiego tytułu by uniknąć duplikatów
                                 exists = conn_insert.execute(
                                     text("SELECT 1 FROM tenders WHERE title = :t LIMIT 1"), {"t": tytul}
                                 ).scalar()
@@ -100,10 +100,16 @@ def uruchom_pobieranie():
                                         {"t": tytul, "s": nazwa}
                                     )
                                     conn_insert.commit()
+                                    nowe_dodane += 1
+                                    
+                                    # TUTAJ: Wyświetlamy skrócony tytuł w konsoli!
+                                    skrot = tytul[:75] + "..." if len(tytul) > 75 else tytul
+                                    log_msg(f"🆕 Dodano: {skrot}")
+                                    
                         except Exception as ex:
                             log_msg(f"❌ Błąd zapisu SQL: {ex}")
                         
-                log_msg(f"✅ Znaleziono pasujących ogłoszeń: {znalezione}")
+                log_msg(f"✅ Podsumowanie dla źródła: Znaleziono {znalezione} pasujących, z czego {nowe_dodane} to nowe wpisy.")
                 
             else:
                 log_msg("🛠️ Źródło HTML pominięte (brak implementacji).")
@@ -125,7 +131,6 @@ if __name__ == "__main__":
 
     inicjalizuj_baze()
     
-    # Wymuszamy natychmiastowe uruchomienie cyklu po włączeniu kontenera
     try:
         with engine.connect() as conn:
             conn.execute(text("UPDATE app_settings SET worker_status = 'running', last_run = NULL WHERE id = 1"))
@@ -143,16 +148,13 @@ if __name__ == "__main__":
                 
                 if status == 'running':
                     teraz = datetime.now()
-                    # Uruchom jeśli to pierwszy raz po włączeniu, lub minął interwał
                     if last_run is None or teraz >= (last_run + timedelta(minutes=interval_min)):
                         uruchom_pobieranie()
                         
-                        # Aktualizujemy czas OSTATNIEGO wykonania
                         conn.execute(text("UPDATE app_settings SET last_run = :now WHERE id = 1"), {"now": datetime.now()})
                         conn.commit()
                         
         except Exception as e:
             print(f"Błąd głównej pętli: {e}")
             
-        # Krótsza drzemka dla szybszej reakcji przycisków w GUI
         time.sleep(5)
