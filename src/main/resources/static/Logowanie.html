@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/x-icon" th:href="@{/img/app.png}">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <title>Przetarg App — logowanie</title>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col">
+    <!-- Header -->
+    <header class="relative z-10 border-b border-white/10 bg-black/40 backdrop-blur-md">
+        <div class="max-w-7xl mx-auto px-6 md:px-12 py-5 flex items-center justify-between">
+            <div class="flex items-center space-x-2">
+                <a class="text-2xl font-black tracking-widest text-cyan-400 drop-shadow-[0_0_12px_rgba(34,211,238,0.8)]">
+                    PRZETARG<span class="text-white"> APP</span>
+                </a>
+            </div>
+            
+            <nav class="hidden md:flex items-center space-x-8 text-xs font-bold tracking-widest text-slate-300 uppercase">
+                <a href="index.html" class="hover:text-cyan-400 transition">Strona główna</a>
+                <a href="PanelPrzetargow.html" class="hover:text-cyan-400 transition">Przetargi</a>
+                <a href="#" class="hover:text-cyan-400 transition">Kontakt</a>
+            </nav>
+
+            <div>
+                <a href="Logowanie.html" class="text-xs font-bold tracking-wider uppercase border border-pink-500/60 text-pink-400 px-5 py-2.5 rounded-full hover:bg-pink-500 hover:text-white transition shadow-[0_0_15px_rgba(236,72,153,0.3)]">
+                    Logowanie
+                </a>
+            </div>
+        </div>
+    </header>
+
+  
+    <main class="flex-1 flex items-center justify-center p-4">
+        <div class="w-full max-w-md p-8 bg-slate-800/90 text-slate-900 rounded-xl shadow-2xl">
+            <h2 class="text-2xl font-bold text-center mb-6 text-white">Zaloguj się</h2>
+        
+            <div id="alertBox" class="hidden mb-4 p-3 rounded-lg text-sm text-center font-medium bg-red-100 text-red-700"></div>
+
+            <form id="loginForm" class="space-y-4">
+                <div>
+                    <label for="email" class="block text-white font-bold mb-1 text-sm">E-mail</label>
+                    <input 
+                        type="email" 
+                        name="email" 
+                        id="email" 
+                        required
+                        placeholder="Podaj e-mail" 
+                        class="w-full border border-gray-300 px-3 py-2 rounded-lg outline-none focus:ring-2 focus:ring-cyan-500 focus:border-cyan-400 transition"
+                    />
+                </div>
+                <div>
+                    <label for="haslo" class="block text-white font-bold mb-1 text-sm">Hasło</label>
+                    <input 
+                        type="password" 
+                        name="haslo" 
+                        id="haslo" 
+                        required
+                        placeholder="Podaj hasło" 
+                        class="w-full border border-gray-300 px-3 py-2 rounded-lg outline-none focus:ring-2 focus:ring-cyan-500 focus:border-cyan-400 transition"
+                    />
+                </div>
+                <button 
+                    type="submit" 
+                    class="w-full py-2.5 px-4 mt-2 border bg-slate-900 border-pink-500/60 text-pink-400 px-5 py-2.5 rounded-full hover:bg-pink-500 hover:text-white transition shadow-[0_0_15px_rgba(236,72,153,0.3)]">
+                    Zaloguj się
+                </button>
+            </form>
+        </div>
+    </main>
+     <footer class="border-t border-slate-800 py-6 text-center text-xs text-slate-500">
+        &copy; 2026 Przetarg App. Wszelkie prawa zastrzeżone.
+    </footer>
+
+    <script>
+        const form = document.getElementById('loginForm');
+        const alertBox = document.getElementById('alertBox');
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            alertBox.classList.add('hidden');
+            alertBox.className = 'hidden mb-4 p-3 rounded-lg text-sm text-center font-medium';
+
+            const dane = {
+                email: document.getElementById('email').value,
+                haslo: document.getElementById('haslo').value
+            };
+
+            try {
+                const csrfResponse = await fetch('/api/csrf');
+                if (!csrfResponse.ok) throw new Error('Nie udało się pobrać tokenu bezpieczeństwa.');
+                const csrf = await csrfResponse.json();
+                const response = await fetch('/api/users/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
+                    credentials: 'same-origin',
+                    body: JSON.stringify(dane)
+                });
+
+                if (!response.ok) {
+                    throw new Error('Nieprawidłowy e-mail lub hasło');
+                }
+
+                const user = await response.json();
+                localStorage.setItem('przetargUser', JSON.stringify(user));
+                
+                alertBox.textContent = 'Zalogowano pomyślnie! Przekierowanie...';
+                alertBox.classList.remove('hidden');
+                alertBox.classList.add('bg-emerald-100', 'text-emerald-700');
+
+                setTimeout(() => {
+                    window.location.href = user.rola === 'ADMIN'
+                        ? 'PanelAdministratora.html'
+                        : 'PanelPrzetargow.html';
+                }, 800);
+            } catch (err) {
+                alertBox.textContent = err.message;
+                alertBox.classList.remove('hidden');
+                alertBox.classList.add('bg-rose-100', 'text-rose-700');
+            }
+        });
+    </script>
+</body>
+</html>
