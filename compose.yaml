@@ -53,6 +53,8 @@ services:
       DB_NAME: ${DB_NAME:-przetarg_app_db}
       DB_USER: ${DB_USERNAME:-przetarg}
       DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+    volumes:
+      - ./python-backend/src:/app/src
     ports:
       - "127.0.0.1:8501:8501"
       - "127.0.0.1:8502:8502"

@@ -163,7 +163,7 @@ def delete_keyword(keyword_id: str) -> None:
 def append_tenders_to_history(endpoint_name: str, evaluated_items: List[Dict[str, Any]]) -> int:
     """
     Zapisuje ocenione ogłoszenia do tabeli tenders 
-    oraz powiązane trafienia do tabeli tender_matched_keywords.
+    oraz powiązane trafienia (w tym słowa wykluczające) do tabeli tender_matched_keywords.
     """
     conn = get_connection()
     cur = conn.cursor()
@@ -184,15 +184,48 @@ def append_tenders_to_history(endpoint_name: str, evaluated_items: List[Dict[str
         if not deadline:
             deadline = now_pl + datetime.timedelta(days=14)
 
-        status = ev.get("status", "NEUTRAL")
+        status = ev.get("status", "NEUTRAL")  # MATCHED / NEUTRAL / REJECTED
         score = int(ev.get("score", 0))
 
+        # Przygotowujemy listę wszystkich powiązanych słów (dopasowane + wykluczające)
+        all_associated_words = list(ev.get("matched_keywords", []))
+        rejected_word = ev.get("rejected_by")
+        if rejected_word and rejected_word not in all_associated_words:
+            all_associated_words.append(rejected_word)
+
+        # Sprawdzamy, czy ogłoszenie już istnieje w bazie
         cur.execute("SELECT id FROM tenders WHERE title = %s AND source_url = %s", (title, source_url))
         exists = cur.fetchone()
+
         if exists:
+            # Ogłoszenie już istnieje: uzupełniamy brakujące powiązania słów kluczowych
+            existing_tender_id = str(exists[0])
+            if all_associated_words:
+                clean_words = [w.strip().lower() for w in all_associated_words if w and w.strip()]
+                cur.execute("""
+                    SELECT id FROM keywords 
+                    WHERE LOWER(TRIM(phrase)) = ANY(%s)
+                """, (clean_words,))
+                kw_rows = cur.fetchall()
+                for (kw_id,) in kw_rows:
+                    cur.execute("""
+                        INSERT INTO tender_matched_keywords (tender_id, keyword_id)
+                        VALUES (%s, %s)
+                        ON CONFLICT DO NOTHING
+                    """, (existing_tender_id, kw_id))
+                conn.commit()
             continue
 
+        # Nowy przetarg
         tender_id = str(uuid.uuid4())
+
+        # Logika statusu operacyjnego
+        if status == "REJECTED":
+            operational_status = "REJECTED"
+        elif score > 0:
+            operational_status = "INTERESTING"
+        else:
+            operational_status = "NEW"
 
         try:
             cur.execute("""
@@ -207,15 +240,19 @@ def append_tenders_to_history(endpoint_name: str, evaluated_items: List[Dict[str
                 )
             """, (
                 tender_id, title, description, category, location,
-                deadline, status, "NEW",
+                deadline, status, operational_status,
                 score, False, source_url, now_pl
             ))
 
-            matched_words = ev.get("matched_keywords", [])
-            if matched_words:
-                cur.execute("SELECT id, phrase FROM keywords WHERE phrase = ANY(%s)", (matched_words,))
+            # Bezpieczne zapisywanie powiązań (case-insensitive)
+            if all_associated_words:
+                clean_words = [w.strip().lower() for w in all_associated_words if w and w.strip()]
+                cur.execute("""
+                    SELECT id FROM keywords 
+                    WHERE LOWER(TRIM(phrase)) = ANY(%s)
+                """, (clean_words,))
                 kw_rows = cur.fetchall()
-                for kw_id, _ in kw_rows:
+                for (kw_id,) in kw_rows:
                     cur.execute("""
                         INSERT INTO tender_matched_keywords (tender_id, keyword_id)
                         VALUES (%s, %s)
@@ -239,11 +276,15 @@ def append_tenders_to_history(endpoint_name: str, evaluated_items: List[Dict[str
 # =========================================================
 
 def load_tender_history(limit: int = 500) -> List[Dict[str, Any]]:
-    """Pobiera historię ocenionych ogłoszeń wraz ze zmapowanymi słowami kluczowymi pod widok analityki."""
+    """
+    Pobiera historię ogłoszeń wraz ze słowami wykluczającymi wyciągniętymi
+    z relacji tender_matched_keywords dla rekordów odrzuconych.
+    """
     try:
         conn = get_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("""
+        safe_limit = int(limit)
+        cur.execute(f"""
             SELECT 
                 t.id,
                 t.title,
@@ -254,36 +295,56 @@ def load_tender_history(limit: int = 500) -> List[Dict[str, Any]]:
                 t.status AS system_status,
                 t.status,
                 t.operational_status,
+                t.operational_status AS business_status,
                 t.score,
                 t.source_url,
+                COALESCE(NULLIF(t.source_url, ''), 'e-Zamówienia') AS endpoint,
+                COALESCE(NULLIF(t.source_url, ''), 'e-Zamówienia') AS endpoint_name,
                 t.created_at AS scanned_at,
                 t.created_at,
                 COALESCE(
-                    ARRAY_AGG(k.phrase) FILTER (WHERE k.phrase IS NOT NULL),
+                    MAX(CASE 
+                        WHEN k.keyword_type ~* '(wyklucz|exclud)' 
+                        THEN k.phrase 
+                    END),
+                    ''
+                ) AS rejected_by,
+                ARRAY[t.category]::text[] AS matched_categories,
+                COALESCE(
+                    ARRAY_AGG(k.phrase) FILTER (
+                        WHERE k.phrase IS NOT NULL 
+                        AND NOT (k.keyword_type ~* '(wyklucz|exclud)')
+                    ),
                     ARRAY[]::VARCHAR[]
                 ) AS matched_keywords
             FROM tenders t
             LEFT JOIN tender_matched_keywords tmk ON t.id = tmk.tender_id
             LEFT JOIN keywords k ON tmk.keyword_id = k.id
-            GROUP BY t.id
+            GROUP BY 
+                t.id, t.title, t.description, t.category, t.location,
+                t.submission_deadline, t.status, t.operational_status,
+                t.score, t.source_url, t.created_at
             ORDER BY t.created_at DESC
-            LIMIT %s
-        """, (limit,))
+            LIMIT {safe_limit};
+        """)
         rows = cur.fetchall()
         cur.close()
         conn.close()
         return [dict(r) for r in rows]
     except Exception as e:
-        print(f"[STORAGE] Błąd pobierania historii przetargów: {e}")
-        return []
+        print(f"[STORAGE ERROR] Błąd pobierania historii przetargów: {e}", flush=True)
+        raise e
 
 
 def clear_tender_history() -> bool:
-    """Czyści zapisaną historię przetargów oraz powiązania słów kluczowych."""
+    """Czyści zapisaną historię przetargów wraz ze wszystkimi tabelami powiązanymi kluczami obcymi."""
     try:
         conn = get_connection()
         cur = conn.cursor()
         cur.execute("DELETE FROM tender_matched_keywords;")
+        cur.execute("DELETE FROM tender_status_history;")
+        cur.execute("DELETE FROM user_tender_statuses;")
+        cur.execute("DELETE FROM bids;")
         cur.execute("DELETE FROM tenders;")
         conn.commit()
         cur.close()
