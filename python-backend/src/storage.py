@@ -33,7 +33,7 @@ def load_endpoints() -> List[Dict[str, Any]]:
             {
                 "id": 1,
                 "name": "e-Zamówienia (Wszystkie)",
-                "url": "https://ezamowienia.gov.pl/mo-board/api/v1/notice",
+                "url": "https://ezamowienia.gov.pl/mo-board/api/v1/Board/Search?SortingColumnName=PublicationDate&SortingDirection=DESC&PageSize=100",
                 "method": "GET"
             }
         ]
@@ -174,17 +174,53 @@ def append_tenders_to_history(endpoint_name: str, evaluated_items: List[Dict[str
         data = item.get("data", {})
         ev = item.get("evaluation", {})
 
-        title = (data.get("orderObject") or data.get("title") or "Brak tytułu")[:160]
-        description = data.get("body") or data.get("description") or title
-        category = (ev.get("matched_categories") or ["Ogólne"])[0][:100]
-        location = (data.get("location") or "Polska")[:160]
-        source_url = (data.get("url") or "")[:2048]
+        # e-Zamówienia używa innych nazw niż ręcznie dodawane rekordy.
+        title = (
+            data.get("orderObject")
+            or data.get("title")
+            or data.get("noticeNumber")
+            or "Brak tytułu"
+        )[:160]
+        description = (
+            data.get("body")
+            or data.get("description")
+            or data.get("htmlBody")
+            or data.get("cpvCode")
+            or title
+        )
+        category = (
+            ev.get("matched_categories")
+            or [data.get("orderType") or data.get("noticeType") or "Ogólne"]
+        )[0][:100]
+        location = (
+            data.get("location")
+            or data.get("organizationCity")
+            or data.get("organizationProvince")
+            or "Polska"
+        )[:160]
+        # API nie ma pola `url` dla każdego ogłoszenia. Numer/identyfikator
+        # zapewnia stabilny klucz deduplikacji kolejnych pobrań.
+        source_url = (
+            data.get("url")
+            or data.get("pdfUrl")
+            or data.get("objectId")
+            or data.get("moIdentifier")
+            or data.get("noticeNumber")
+            or ""
+        )[:2048]
 
-        deadline = data.get("submissionDeadline")
+        deadline = data.get("submissionDeadline") or data.get("submittingOffersDate")
+        if isinstance(deadline, str):
+            try:
+                deadline = datetime.datetime.fromisoformat(deadline.replace("Z", "+00:00"))
+                if deadline.tzinfo is not None:
+                    deadline = deadline.astimezone(WARSAW_TZ).replace(tzinfo=None)
+            except ValueError:
+                deadline = None
         if not deadline:
             deadline = now_pl + datetime.timedelta(days=14)
 
-        status = ev.get("status", "NEUTRAL")  # MATCHED / NEUTRAL / REJECTED
+        classification_status = ev.get("status", "NEUTRAL")  # MATCHED / NEUTRAL / REJECTED
         score = int(ev.get("score", 0))
 
         # Przygotowujemy listę wszystkich powiązanych słów (dopasowane + wykluczające)
@@ -220,12 +256,16 @@ def append_tenders_to_history(endpoint_name: str, evaluated_items: List[Dict[str
         tender_id = str(uuid.uuid4())
 
         # Logika statusu operacyjnego
-        if status == "REJECTED":
-            operational_status = "REJECTED"
+        if classification_status == "REJECTED":
+            operational_status = "ODRZUCONY"
         elif score > 0:
-            operational_status = "INTERESTING"
+            operational_status = "INTERESUJACY"
         else:
-            operational_status = "NEW"
+            operational_status = "NOWY"
+
+        # `status` to status cyklu życia przetargu, a nie wynik matchera.
+        # PostgreSQL ogranicza tę kolumnę do OTWARTY/ZAMKNIETY.
+        lifecycle_status = "OTWARTY"
 
         try:
             cur.execute("""
@@ -240,7 +280,7 @@ def append_tenders_to_history(endpoint_name: str, evaluated_items: List[Dict[str
                 )
             """, (
                 tender_id, title, description, category, location,
-                deadline, status, operational_status,
+                deadline, lifecycle_status, operational_status,
                 score, False, source_url, now_pl
             ))
 

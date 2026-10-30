@@ -36,12 +36,12 @@ public class Przetarg {
     @Column(name = "submission_deadline", nullable = false)
     private LocalDateTime terminSkladaniaOfert;
 
-    @Enumerated(EnumType.STRING)
+    @Convert(converter = StatusPrzetarguConverter.class)
     @Column(name = "status", nullable = false, length = 20)
     @Builder.Default
     private StatusPrzetargu status = StatusPrzetargu.OTWARTY;
 
-    @Enumerated(EnumType.STRING)
+    @Convert(converter = StatusOperacyjnyConverter.class)
     @Column(name = "operational_status", length = 24)
     @Builder.Default
     private StatusOperacyjny statusOperacyjny = StatusOperacyjny.NOWY;
