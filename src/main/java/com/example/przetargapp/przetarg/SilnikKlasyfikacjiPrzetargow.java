@@ -43,9 +43,9 @@ public class SilnikKlasyfikacjiPrzetargow {
         przetarg.getDopasowaneSlowa().addAll(dopasowane);
 
         if (!przetarg.isStatusUstawionyRecznie()) {
-            StatusOperacyjny nowyStatus = wykluczajace.isEmpty() && punkty > 0
-                    ? StatusOperacyjny.INTERESUJACY
-                    : StatusOperacyjny.ODRZUCONY;
+            StatusOperacyjny nowyStatus = !wykluczajace.isEmpty()
+                    ? StatusOperacyjny.ODRZUCONY
+                    : punkty > 0 ? StatusOperacyjny.INTERESUJACY : StatusOperacyjny.NOWY;
             zmienStatus(przetarg, nowyStatus, zmienilUzytkownik);
         }
     }

@@ -24,7 +24,7 @@
         <section>
             <p class="text-xs font-bold uppercase tracking-widest text-cyan-400">Administracja</p>
             <h1 class="mt-2 text-3xl font-black text-white">Panel administracyjny</h1>
-            <p class="mt-2 text-sm text-slate-400">Zarządzaj regułami klasyfikacji i statystykami przetargów.</p>
+            <p class="mt-2 text-sm text-slate-400">Zarządzaj regułami klasyfikacji i kontami użytkowników.</p>
         </section>
 
         <div id="pageMessage" class="hidden rounded-lg p-4 text-sm" role="status" aria-live="polite"></div>
@@ -59,24 +59,6 @@
                 <table class="w-full min-w-[680px] text-left text-sm">
                     <thead class="border-b border-slate-800 text-xs uppercase text-slate-400"><tr><th class="px-3 py-3">Fraza</th><th class="px-3 py-3">Typ</th><th class="px-3 py-3">Kategoria</th><th class="px-3 py-3">Punkty</th><th class="px-3 py-3">Stan</th><th class="px-3 py-3">Akcje</th></tr></thead>
                     <tbody id="keywords" class="divide-y divide-slate-800"></tbody>
-                </table>
-            </div>
-        </section>
-
-        <section class="rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
-            <div class="flex flex-wrap items-end justify-between gap-4">
-                <div><h2 class="text-xl font-bold">Analityka lejka</h2><p class="mt-1 text-sm text-slate-400">Statystyki przetargów i skuteczność aktywnych reguł.</p></div>
-                <form id="analyticsForm" class="flex flex-wrap items-end gap-3">
-                    <label class="text-xs text-slate-400">Od<input name="od" type="datetime-local" class="mt-1 block rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"></label>
-                    <label class="text-xs text-slate-400">Do<input name="doDaty" type="datetime-local" class="mt-1 block rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"></label>
-                    <button class="rounded-lg border border-slate-700 px-4 py-2 text-sm hover:border-cyan-400">Odśwież</button>
-                </form>
-            </div>
-            <div id="analytics" class="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"></div>
-            <div class="mt-5 overflow-x-auto">
-                <table class="w-full text-left text-sm">
-                    <thead class="border-b border-slate-800 text-xs uppercase text-slate-400"><tr><th class="px-3 py-3">Fraza</th><th class="px-3 py-3">Kategoria</th><th class="px-3 py-3">Dopasowania</th><th class="px-3 py-3">Interesujące</th></tr></thead>
-                    <tbody id="keywordStats" class="divide-y divide-slate-800"></tbody>
                 </table>
             </div>
         </section>
@@ -179,7 +161,7 @@
                             try {
                                 await api(`/api/slowa-kluczowe/${encodeURIComponent(keyword.id)}`, { method: 'DELETE' });
                                 showMessage('Reguła została usunięta, a przetargi ponownie sklasyfikowane.', true);
-                                await Promise.all([loadKeywords(), loadAnalytics()]);
+                                await loadKeywords();
                             } catch (error) {
                                 showMessage(error.message);
                             }
@@ -187,44 +169,6 @@
                     );
                     row.append(actions);
                     container.append(row);
-                });
-            }
-
-            async function loadAnalytics() {
-                const formData = new FormData(document.getElementById('analyticsForm'));
-                const params = new URLSearchParams();
-                for (const [key, value] of formData.entries()) if (value) params.set(key, value);
-                const query = params.toString();
-                const stats = await api(`/api/analytics/przetargi${query ? `?${query}` : ''}`);
-                const cards = [
-                    ['Wszystkie', stats.liczbaWszystkich],
-                    ['Nowe / do weryfikacji', stats.liczbaNowych],
-                    ['Interesujące', `${stats.liczbaInteresujacych} (${stats.procentInteresujacych}%)`],
-                    ['Odrzucone', `${stats.liczbaOdrzuconych} (${stats.procentOdrzuconych}%)`]
-                ];
-                const cardContainer = document.getElementById('analytics');
-                cardContainer.replaceChildren();
-                cards.forEach(([label, value]) => {
-                    const card = document.createElement('div');
-                    card.className = 'rounded-xl border border-slate-800 bg-slate-950 p-4';
-                    const title = document.createElement('p');
-                    title.className = 'text-sm text-slate-400';
-                    title.textContent = label;
-                    const count = document.createElement('p');
-                    count.className = 'mt-2 text-2xl font-bold text-white';
-                    count.textContent = value;
-                    card.append(title, count);
-                    cardContainer.append(card);
-                });
-                const keywordContainer = document.getElementById('keywordStats');
-                keywordContainer.replaceChildren();
-                stats.skutecznoscSlowKluczowych.forEach(keyword => {
-                    const row = document.createElement('tr');
-                    textCell(row, keyword.fraza);
-                    textCell(row, keyword.kategoria || '—');
-                    textCell(row, String(keyword.liczbaDopasowan));
-                    textCell(row, String(keyword.liczbaInteresujacych));
-                    keywordContainer.append(row);
                 });
             }
 
@@ -246,7 +190,7 @@
                     form.elements.namedItem('id').value = '';
                     form.elements.namedItem('punkty').value = '1';
                     showMessage('Reguła zapisana, przetargi zostały ponownie sklasyfikowane.', true);
-                    await Promise.all([loadKeywords(), loadAnalytics()]);
+                    await loadKeywords();
                 } catch (error) {
                     showMessage(error.message);
                 }
@@ -259,15 +203,6 @@
                 form.elements.namedItem('punkty').value = '1';
             });
 
-            document.getElementById('analyticsForm').addEventListener('submit', async event => {
-                event.preventDefault();
-                try {
-                    await loadAnalytics();
-                } catch (error) {
-                    showMessage(error.message);
-                }
-            });
-
             document.getElementById('logout').addEventListener('click', async () => {
                 try {
                     await api('/api/users/logout', { method: 'POST' });
@@ -277,7 +212,7 @@
                 }
             });
 
-            Promise.all([loadKeywords(), loadAnalytics()])
+            loadKeywords()
                 .catch(error => showMessage(error.message));
         })();
     </script>

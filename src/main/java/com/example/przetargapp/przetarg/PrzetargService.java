@@ -124,6 +124,17 @@ public class PrzetargService {
     }
 
     @Transactional(readOnly = true)
+    public PodsumowaniePrzetargowResponse podsumowanie(UUID uzytkownikId) {
+        List<PrzetargResponse> przetargi = listaPrzetargow(
+                null, null, null, null, null, null, null, uzytkownikId);
+        return new PodsumowaniePrzetargowResponse(
+                przetargi.size(),
+                przetargi.stream().filter(przetarg -> przetarg.statusOperacyjny() == StatusOperacyjny.NOWY).count(),
+                przetargi.stream().filter(przetarg -> przetarg.statusOperacyjny() == StatusOperacyjny.INTERESUJACY).count(),
+                przetargi.stream().filter(przetarg -> przetarg.statusOperacyjny() == StatusOperacyjny.ODRZUCONY).count());
+    }
+
+    @Transactional(readOnly = true)
     public PrzetargResponse pobierz(UUID id, UUID uzytkownikId) {
         Przetarg przetarg = znajdzPrzetarg(id);
         return mapToResponse(przetarg, statusUzytkownika(przetarg.getId(), uzytkownikId));
