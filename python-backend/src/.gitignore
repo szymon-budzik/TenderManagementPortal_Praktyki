@@ -1,0 +1,27 @@
+# Python & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+
+# Java & Maven / Gradle
+target/
+*.class
+*.jar
+*.war
+.mvn/
+
+# Baza danych i Docker
+postgres_data/
+*.log
+
+# IDE & Edytory
+.idea/
+.vscode/
+*.iml
+.DS_Store
+
+# Środowiskowe / Sekrety
+.env
