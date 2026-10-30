@@ -34,6 +34,22 @@
             <button id="refresh" class="rounded-lg border border-slate-700 px-4 py-2 text-sm font-semibold hover:border-cyan-400">Odśwież listę</button>
         </section>
 
+        <section aria-labelledby="summaryHeading">
+            <div class="mb-3 flex flex-wrap items-end justify-between gap-2">
+                <div>
+                    <h2 id="summaryHeading" class="text-xl font-bold">Moje statystyki</h2>
+                    <p class="mt-1 text-sm text-slate-400">Liczba przetargów według statusów widocznych na Twoim koncie.</p>
+                </div>
+                <span id="summaryUpdated" class="text-xs text-slate-500"></span>
+            </div>
+            <div id="tenderSummary" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div class="rounded-xl border border-slate-800 bg-slate-900/70 p-4"><p class="text-sm text-slate-400">Wszystkie</p><p data-summary="wszystkie" class="mt-2 text-3xl font-black text-white">—</p></div>
+                <div class="rounded-xl border border-cyan-900/60 bg-slate-900/70 p-4"><p class="text-sm text-slate-400">Nowe</p><p data-summary="nowe" class="mt-2 text-3xl font-black text-cyan-300">—</p></div>
+                <div class="rounded-xl border border-emerald-900/60 bg-slate-900/70 p-4"><p class="text-sm text-slate-400">Interesujące</p><p data-summary="interesujace" class="mt-2 text-3xl font-black text-emerald-300">—</p></div>
+                <div class="rounded-xl border border-rose-900/60 bg-slate-900/70 p-4"><p class="text-sm text-slate-400">Odrzucone</p><p data-summary="odrzucone" class="mt-2 text-3xl font-black text-rose-300">—</p></div>
+            </div>
+        </section>
+
         <section id="organizerSection" class="hidden rounded-2xl border border-cyan-900/60 bg-slate-900/70 p-6">
             <h2 class="text-xl font-bold">Opublikuj przetarg</h2>
             <p class="mt-1 text-sm text-slate-400">Podaj warunki postępowania i termin składania ofert.</p>
@@ -173,6 +189,7 @@
 
         const isOrganizer = ['ORGANIZER', 'ADMIN'].includes(currentUser.rola);
         const isParticipant = currentUser.rola === 'USER';
+        const seenTendersStorageKey = `przetargSeenTenderIds:${currentUser.id}`;
         document.getElementById('userInfo').textContent = `${currentUser.imie} ${currentUser.nazwisko}`;
         document.getElementById('roleLabel').textContent = currentUser.rola === 'ADMIN'
             ? 'Panel administratora'
@@ -182,6 +199,16 @@
         document.getElementById('organizerNavLink').classList.toggle('hidden', !isOrganizer);
         document.getElementById('offersNavLink').classList.toggle('hidden', !isParticipant);
         document.getElementById('adminNavLink').classList.toggle('hidden', currentUser.rola !== 'ADMIN');
+
+        async function initializeNotifications() {
+            if (!('Notification' in window)) return;
+            const permission = Notification.permission === 'default'
+                ? await Notification.requestPermission()
+                : Notification.permission;
+            if (permission === 'granted') {
+                await checkForNewTenders();
+            }
+        }
         document.getElementById('logout').addEventListener('click', async () => {
             try {
                 await api('/api/users/logout', { method: 'POST' });
@@ -241,6 +268,7 @@
 
         async function saveTenderStatus(tender, statusSelect, statusResult) {
             const previousStatus = tender.statusOperacyjny;
+            const newStatus = statusSelect.value;
             statusSelect.disabled = true;
             statusResult.textContent = 'Zapisywanie…';
             statusResult.className = 'text-xs text-slate-400';
@@ -248,8 +276,18 @@
                 await api(`/api/przetargi/${tender.id}/status`, {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ status: statusSelect.value })
+                    body: JSON.stringify({ status: newStatus })
                 });
+                tender.statusOperacyjny = newStatus;
+                statusResult.textContent = 'Status zapisany.';
+                statusResult.className = 'text-xs text-emerald-300';
+
+                // After moving an item, an active status filter can hide it and
+                // make a successful rejection look as if it was not saved.
+                const statusFilter = document.querySelector('#tenderFilters [name="status"]');
+                if (statusFilter?.value === previousStatus) {
+                    statusFilter.value = '';
+                }
                 await loadAll();
             } catch (error) {
                 statusSelect.value = previousStatus;
@@ -471,6 +509,15 @@
             }
         }
 
+        async function loadSummary() {
+            const summary = await api('/api/przetargi/podsumowanie');
+            Object.entries(summary).forEach(([key, value]) => {
+                const element = document.querySelector(`[data-summary="${key}"]`);
+                if (element) element.textContent = value;
+            });
+            document.getElementById('summaryUpdated').textContent = 'Zaktualizowano przed chwilą';
+        }
+
         async function loadFilterOptions() {
             const options = await api('/api/przetargi/filtry');
             const keywords = document.getElementById('keywordFilter');
@@ -478,6 +525,33 @@
             options.slowa.forEach(keyword => {
                 keywords.add(new Option(`${keyword.fraza} (${keyword.typ === 'POSZUKIWANE' ? 'poszukiwane' : 'wykluczające'})`, keyword.id));
             });
+        }
+
+        async function checkForNewTenders() {
+            const tenders = await api('/api/przetargi');
+            const notificationPermission = 'Notification' in window ? Notification.permission : 'unsupported';
+            const currentIds = tenders.map(tender => tender.id);
+            const storedSeenIds = localStorage.getItem(seenTendersStorageKey);
+            let seenIds = [];
+            try {
+                seenIds = JSON.parse(storedSeenIds || '[]');
+            } catch {
+                seenIds = [];
+            }
+            const seenIdSet = new Set(seenIds);
+            const newTenders = tenders.filter(tender => !seenIdSet.has(tender.id));
+
+            // The first check establishes a baseline and does not notify about old data.
+            if (storedSeenIds !== null && newTenders.length) {
+                const message = newTenders.length === 1
+                    ? `Nowy przetarg: ${newTenders[0].tytul}`
+                    : `Pojawiły się ${newTenders.length} nowe przetargi.`;
+                if (notificationPermission === 'granted') {
+                    new Notification('Przetarg App', { body: message, tag: 'new-tenders' });
+                }
+                showMessage(document.getElementById('pageMessage'), message, true);
+            }
+            localStorage.setItem(seenTendersStorageKey, JSON.stringify(currentIds));
         }
 
         async function loadOrganizerTenders() {
@@ -537,7 +611,8 @@
             pageMessage.classList.add('hidden');
             try {
                 await loadFilterOptions();
-                await Promise.all([loadTenders(), loadOrganizerTenders(), loadOffers()]);
+                await Promise.all([loadSummary(), loadTenders(), loadOrganizerTenders(), loadOffers()]);
+                await checkForNewTenders();
             } catch (error) {
                 showMessage(pageMessage, error.message);
             }
@@ -572,7 +647,14 @@
         const minimumDeadline = new Date(Date.now() + 60000);
         minimumDeadline.setMinutes(minimumDeadline.getMinutes() - minimumDeadline.getTimezoneOffset());
         document.getElementById('deadline').min = minimumDeadline.toISOString().slice(0, 16);
-        loadAll();
+        loadAll().finally(() => initializeNotifications().catch(() => {
+            // Notification permission is optional and must not block the panel.
+        }));
+        window.setInterval(() => {
+            checkForNewTenders().catch(() => {
+                // Notification polling must not interrupt normal panel usage.
+            });
+        }, 60000);
         })();
     </script>
 </body>

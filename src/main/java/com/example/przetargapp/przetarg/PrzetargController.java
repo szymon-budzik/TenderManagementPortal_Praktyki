@@ -36,6 +36,11 @@ public class PrzetargController {
         return przetargService.opcjeFiltrowPrzetargu();
     }
 
+    @GetMapping("/podsumowanie")
+    public PodsumowaniePrzetargowResponse podsumowanie(Authentication authentication) {
+        return przetargService.podsumowanie(UUID.fromString(authentication.getName()));
+    }
+
     @GetMapping("/{id}")
     public PrzetargResponse szczegoly(@PathVariable UUID id, Authentication authentication) {
         return przetargService.pobierz(id, UUID.fromString(authentication.getName()));
