@@ -16,7 +16,6 @@ def test_connection(url: str, timeout: int = 5) -> Tuple[bool, str]:
         if response.status_code in [200, 201]:
             return True, f"Połączono pomyślnie (Status: {response.status_code})"
         if response.status_code == 400:
-            # Wiele rządowych API (np. e-Zamówienia) bez podanych parametrów zwraca 400, co oznacza, że serwer żyje
             return True, "Serwer osiągalny (Status: 400 - wymagane parametry zapytania)"
         return False, f"Błąd odpowiedzi (Status: {response.status_code})"
     except requests.exceptions.RequestException as e:
@@ -24,7 +23,7 @@ def test_connection(url: str, timeout: int = 5) -> Tuple[bool, str]:
 
 
 def _build_page_url(base_url: str, page_param: str, page_number: int) -> str:
-    """Dynamicznie wstrzykuje lub aktualizuje parametr numeru strony w URL bez psucia reszty parametrów."""
+    """Dynamicznie wstrzykuje lub aktualizuje parametr numeru strony w URL."""
     parsed = urllib.parse.urlsplit(base_url)
     query_dict = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
     query_dict[page_param] = [str(page_number)]
@@ -38,7 +37,7 @@ def _build_page_url(base_url: str, page_param: str, page_number: int) -> str:
     ))
 
 
-def fetch_latest_items(url: str, limit: int = 10) -> Tuple[bool, List[Dict[str, Any]], str]:
+def fetch_latest_items(url: str, limit: int = 50) -> Tuple[bool, List[Dict[str, Any]], str]:
     """
     Pobiera i parsuje obiekty z endpointu API (JSON) z automatyczną obsługą wielu podstron
     lub ze strony HTML (BeautifulSoup). Zwraca (sukces, lista_obiektów, komunikat).
@@ -52,11 +51,10 @@ def fetch_latest_items(url: str, limit: int = 10) -> Tuple[bool, List[Dict[str, 
         msg = "Pobrano pomyślnie przez scraper HTML" if success else (err or "Błąd scrapingu HTML")
         return success, items, msg
 
-    # 2. Analiza parametrów paginacji w URL (bez hardcodowania domeny)
+    # 2. Analiza parametrów paginacji w URL
     parsed_url = urllib.parse.urlsplit(url)
     query_params = urllib.parse.parse_qs(parsed_url.query, keep_blank_values=True)
 
-    # Sprawdzamy, czy w przekazanym URL istnieje już parametr strony
     page_param_name = None
     start_page = 1
     has_existing_page_param = False
@@ -71,13 +69,13 @@ def fetch_latest_items(url: str, limit: int = 10) -> Tuple[bool, List[Dict[str, 
                 start_page = 1
             break
 
-    # Jeśli w URL nie zdefiniowano parametru strony:
-    # jeśli URL posiada PageSize -> domyślnie pageNumber, w pozostałych -> page
     if not page_param_name:
-        has_page_size = any(k.lower() in ["pagesize", "per_page"] for k in query_params.keys())
-        page_param_name = "pageNumber" if has_page_size else "page"
+        if "PageSize" in query_params:
+            page_param_name = "PageNumber"
+        else:
+            has_page_size = any(k.lower() in ["pagesize", "per_page"] for k in query_params.keys())
+            page_param_name = "pageNumber" if has_page_size else "page"
 
-    # Odczyt zadeklarowanego rozmiaru strony (jeśli istnieje w URL)
     declared_page_size = None
     for k, v in query_params.items():
         if k.lower() in ["pagesize", "size", "limit", "per_page"]:
@@ -94,25 +92,25 @@ def fetch_latest_items(url: str, limit: int = 10) -> Tuple[bool, List[Dict[str, 
 
     all_items = []
     current_page = start_page
-    last_page_data_sample = None
+    last_page_sample = None
 
     try:
         while len(all_items) < limit:
-            # Pierwsze zapytanie wysyłamy na oryginalny URL (jeśli nie miał parametru strony)
             if current_page == start_page and not has_existing_page_param:
                 request_url = url
             else:
                 request_url = _build_page_url(url, page_param_name, current_page)
 
-            response = requests.get(request_url, headers=headers, timeout=12)
+            print(f"[DEBUG PAGINACJA] Pobieram stronę {current_page} -> URL: {request_url}", flush=True)
 
-            # Błąd na pierwszej stronie przerywa działanie; na kolejnych stronach zwraca to, co już pobrano
+            response = requests.get(request_url, headers=headers, timeout=15)
+
             if response.status_code != 200:
+                print(f"[DEBUG PAGINACJA] Błąd HTTP {response.status_code} na stronie {current_page}", flush=True)
                 if current_page == start_page:
                     return False, [], f"Błąd API: kod {response.status_code}"
                 break
 
-            # Obsługa sytuacji, gdy endpoint zwrócił HTML zamiast JSON
             content_type = response.headers.get("Content-Type", "").lower()
             if "text/html" in content_type:
                 success, items, err = fetch_html_tenders(url, limit=limit)
@@ -121,7 +119,6 @@ def fetch_latest_items(url: str, limit: int = 10) -> Tuple[bool, List[Dict[str, 
 
             data = response.json()
 
-            # Ekstrakcja rekordów z różnych standardów API (lista, items, data, results, content)
             items = []
             if isinstance(data, list):
                 items = data
@@ -134,32 +131,29 @@ def fetch_latest_items(url: str, limit: int = 10) -> Tuple[bool, List[Dict[str, 
                     or []
                 )
 
-            # Koniec danych na serwerze
+            print(f"[DEBUG PAGINACJA] Strona {current_page} zwróciła {len(items)} elementów. Suma: {len(all_items) + len(items)}/{limit}", flush=True)
+
             if not items:
+                print(f"[DEBUG PAGINACJA] Brak kolejnych elementów, kończę pętlę.", flush=True)
                 break
 
-            # Zabezpieczenie przed API, które ignoruje parametry paginacji i zwraca w kółko to samo
             current_sample = str(items[:2])
-            if current_sample == last_page_data_sample:
+            if current_sample == last_page_sample:
+                print(f"[DEBUG PAGINACJA] API powtórzyło dane ze strony {current_page - 1}, zatrzymuję.", flush=True)
                 break
-            last_page_data_sample = current_sample
+            last_page_sample = current_sample
 
             all_items.extend(items)
 
-            # Jeśli otrzymano mniej rekordów niż deklarowany rozmiar strony, to była to ostatnia strona
-            if declared_page_size and len(items) < declared_page_size:
-                break
-
             current_page += 1
 
-            # Odstęp czasowy tylko w przypadku konieczności wykonania kolejnego zapytania
             if len(all_items) < limit:
                 time.sleep(0.3)
 
-        return True, all_items[:limit], f"Pobrano pomyślnie ({len(all_items[:limit])} rekordów)"
+        result_items = all_items[:limit]
+        return True, result_items, f"Pobrano pomyślnie ({len(result_items)} rekordów)"
 
     except ValueError:
-        # Fallback na HTML parser, jeśli dekodowanie JSON-a się nie powiodło
         if current_page == start_page:
             success, items, err = fetch_html_tenders(url, limit=limit)
             msg = "Pobrano pomyślnie przez scraper HTML" if success else (err or "Błąd parsowania odpowiedzi")
@@ -169,4 +163,4 @@ def fetch_latest_items(url: str, limit: int = 10) -> Tuple[bool, List[Dict[str, 
     except Exception as e:
         if all_items:
             return True, all_items[:limit], f"Pobrano częściowo z ostrzeżeniem: {str(e)}"
-        return False, [], f"Błąd parsowania: {str(e)}"
+        return False, [], f"Błąd: {str(e)}"

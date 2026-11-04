@@ -63,7 +63,7 @@ class BackgroundScheduler:
 
         for ep in endpoints:
             try:
-                success, items, _ = fetch_latest_items(ep["url"], limit=20)
+                success, items, _ = fetch_latest_items(ep["url"], limit=50)
                 if success and items:
                     evaluated = evaluate_items(items, keywords)
                     append_tenders_to_history(ep["name"], evaluated)

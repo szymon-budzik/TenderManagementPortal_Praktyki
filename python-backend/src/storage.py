@@ -299,12 +299,14 @@ def append_tenders_to_history(endpoint_name: str, evaluated_items: List[Dict[str
 # ANALITYKA I HISTORIA PRZETARGÓW
 # =========================================================
 
-def load_tender_history(limit: int = 500) -> List[Dict[str, Any]]:
+def load_tender_history(limit: int = None) -> List[Dict[str, Any]]:
     """Pobiera historię ogłoszeń z bazy danych, mapując statusy pod wykresy w Streamlicie."""
     try:
         conn = get_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        safe_limit = int(limit)
+        
+        limit_clause = f"LIMIT {int(limit)}" if limit is not None else ""
+        
         cur.execute(f"""
             SELECT 
                 t.id,
@@ -351,7 +353,7 @@ def load_tender_history(limit: int = 500) -> List[Dict[str, Any]]:
                 t.submission_deadline, t.status, t.operational_status,
                 t.score, t.source_url, t.created_at
             ORDER BY t.created_at DESC
-            LIMIT {safe_limit};
+            {limit_clause};
         """)
         rows = cur.fetchall()
         cur.close()

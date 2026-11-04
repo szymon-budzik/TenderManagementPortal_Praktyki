@@ -129,9 +129,27 @@ def render():
     if not keywords:
         st.warning("Uwaga: Brak zdefiniowanych słów kluczowych. Przejdź do zakładki 'Słowa Kluczowe', aby dodać reguły.")
 
-    if st.button("🚀 Pobierz 10 ogłoszeń i przetestuj dopasowanie", type="primary", key=f"eval_btn_{current_ep['id']}"):
-        with st.spinner("Pobieranie i ewaluacja rekordów..."):
-            success, raw_items, msg = fetch_latest_items(current_ep["url"], limit=10)
+   # --- Sekcja: Ręczny test matchera ---
+    st.divider()
+    st.subheader(f"Ręczny test i skanowanie: {current_ep['name']}")
+
+    keywords = load_keywords()
+    if not keywords:
+        st.warning("Uwaga: Brak zdefiniowanych słów kluczowych. Przejdź do zakładki 'Słowa Kluczowe', aby dodać reguły.")
+
+    # Suwak wyboru limitu (np. od 10 do 200)
+    wybrany_limit = st.slider(
+        "Liczba ogłoszeń do pobrania:",
+        min_value=10,
+        max_value=200,
+        value=50,
+        step=10,
+        key=f"slider_limit_{current_ep['id']}"
+    )
+
+    if st.button(f"🚀 Pobierz {wybrany_limit} ogłoszeń i przetestuj dopasowanie", type="primary", key=f"eval_btn_{current_ep['id']}"):
+        with st.spinner(f"Pobieranie do {wybrany_limit} rekordów z przechodzeniem po stronach..."):
+            success, raw_items, msg = fetch_latest_items(current_ep["url"], limit=wybrany_limit)
             
             if not success:
                 st.error(msg)

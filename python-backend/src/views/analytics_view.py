@@ -36,7 +36,6 @@ def render():
 
     with ch_col1:
         st.subheader("Rozkład statusów")
-        # Mapowanie nazw statusów na polskie dla czytelności wykresu
         status_labels = {
             "MATCHED": "Dopasowane",
             "REJECTED": "Odrzucone",
@@ -90,7 +89,6 @@ def render():
     if status_filter != "Wszystkie":
         view_df = view_df[view_df["status"] == status_filter]
 
-    # Mapowanie kolumny statusu w tabeli na język polski
     display_df = view_df.copy()
     display_df["status_display"] = display_df["status"].map({
         "MATCHED": "DOPASOWANY",
@@ -109,7 +107,7 @@ def render():
             "matched_keywords": "Dopasowania",
             "rejected_by": "Wykluczone przez"
         },
-        use_container_width=True,
+        width="stretch",
         hide_index=True
     )
 
