@@ -14,7 +14,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
-import jakarta.persistence.criteria.JoinType;
 import jakarta.persistence.criteria.Predicate;
 
 @Service
@@ -46,7 +45,7 @@ public class PrzetargService {
 
     @Transactional(readOnly = true)
     public List<PrzetargResponse> listaPrzetargow() {
-        return listaPrzetargow(null, null, null, null, null, null, null, null);
+        return listaPrzetargow(null, null, null, null, null, null, null, null, null);
     }
 
     @Transactional(readOnly = true)
@@ -58,6 +57,7 @@ public class PrzetargService {
             Integer maxPunktacja,
             UUID slowoId,
             String query,
+            String zrodlo,
             UUID uzytkownikId) {
         if (od != null && doDaty != null && od.isAfter(doDaty)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Data początkowa nie może być późniejsza od końcowej");
@@ -68,6 +68,7 @@ public class PrzetargService {
         String fraza = query == null || query.isBlank()
                 ? null
                 : "%" + query.trim().toLowerCase(Locale.ROOT) + "%";
+        String normalizedSource = zrodlo == null ? null : zrodlo.trim().toUpperCase(Locale.ROOT);
         Specification<Przetarg> specification = (root, criteriaQuery, criteriaBuilder) -> {
             List<Predicate> predicates = new ArrayList<>();
             if (od != null) {
@@ -82,17 +83,17 @@ public class PrzetargService {
             if (maxPunktacja != null) {
                 predicates.add(criteriaBuilder.lessThanOrEqualTo(root.get("punktacja"), maxPunktacja));
             }
-            if (slowoId != null) {
-                var slowa = root.join("dopasowaneSlowa", JoinType.INNER);
-                predicates.add(criteriaBuilder.equal(slowa.get("id"), slowoId));
-                criteriaQuery.distinct(true);
-            }
             if (fraza != null) {
                 predicates.add(criteriaBuilder.or(
                         criteriaBuilder.like(criteriaBuilder.lower(root.get("tytul")), fraza),
                         criteriaBuilder.like(criteriaBuilder.lower(root.get("opis")), fraza),
                         criteriaBuilder.like(criteriaBuilder.lower(root.get("kategoria")), fraza),
                         criteriaBuilder.like(criteriaBuilder.lower(root.get("lokalizacja")), fraza)));
+            }
+            if ("WŁASNE".equals(normalizedSource)) {
+                predicates.add(criteriaBuilder.isNull(root.get("adresZrodla")));
+            } else if ("ZEWNĘTRZNE".equals(normalizedSource)) {
+                predicates.add(criteriaBuilder.isNotNull(root.get("adresZrodla")));
             }
             criteriaQuery.orderBy(criteriaBuilder.desc(root.get("dataUtworzenia")));
             return criteriaBuilder.and(predicates.toArray(Predicate[]::new));
@@ -107,15 +108,20 @@ public class PrzetargService {
                                 PrzetargStatusUzytkownika::getPrzetargId,
                                 PrzetargStatusUzytkownika::getStatus));
         return przetargi.stream()
-                .map(przetarg -> mapToResponse(
-                        przetarg, statusyUzytkownika.getOrDefault(przetarg.getId(), przetarg.getStatusOperacyjny())))
+                .filter(przetarg -> slowoId == null || silnikKlasyfikacji.oblicz(przetarg, uzytkownikId).dopasowane().stream()
+                        .anyMatch(slowo -> slowo.getId().equals(slowoId)))
+                .map(przetarg -> {
+                    SilnikKlasyfikacjiPrzetargow.WynikKlasyfikacji wynik = silnikKlasyfikacji.oblicz(przetarg, uzytkownikId);
+                    StatusOperacyjny statusUzytkownika = statusyUzytkownika.getOrDefault(przetarg.getId(), wynik.status());
+                    return mapToResponse(przetarg, statusUzytkownika, wynik);
+                })
                 .filter(przetarg -> status == null || przetarg.statusOperacyjny() == status)
                 .toList();
     }
 
     @Transactional(readOnly = true)
-    public OpcjeFiltrowPrzetarguResponse opcjeFiltrowPrzetargu() {
-        List<OpcjeFiltrowPrzetarguResponse.OpcjaSlowa> slowa = slowoKluczoweRepository.findAllByAktywneTrue().stream()
+    public OpcjeFiltrowPrzetarguResponse opcjeFiltrowPrzetargu(UUID uzytkownikId) {
+        List<OpcjeFiltrowPrzetarguResponse.OpcjaSlowa> slowa = slowoKluczoweRepository.findAllByAktywneTrueAndWlascicielId(uzytkownikId).stream()
                 .filter(slowo -> slowo.getTyp() == TypSlowaKluczowego.POSZUKIWANE)
                 .map(slowo -> new OpcjeFiltrowPrzetarguResponse.OpcjaSlowa(
                         slowo.getId(), slowo.getFraza(), slowo.getTyp()))
@@ -126,7 +132,7 @@ public class PrzetargService {
     @Transactional(readOnly = true)
     public PodsumowaniePrzetargowResponse podsumowanie(UUID uzytkownikId) {
         List<PrzetargResponse> przetargi = listaPrzetargow(
-                null, null, null, null, null, null, null, uzytkownikId);
+                null, null, null, null, null, null, null, null, uzytkownikId);
         return new PodsumowaniePrzetargowResponse(
                 przetargi.size(),
                 przetargi.stream().filter(przetarg -> przetarg.statusOperacyjny() == StatusOperacyjny.NOWY).count(),
@@ -137,7 +143,10 @@ public class PrzetargService {
     @Transactional(readOnly = true)
     public PrzetargResponse pobierz(UUID id, UUID uzytkownikId) {
         Przetarg przetarg = znajdzPrzetarg(id);
-        return mapToResponse(przetarg, statusUzytkownika(przetarg.getId(), uzytkownikId));
+        SilnikKlasyfikacjiPrzetargow.WynikKlasyfikacji wynik = silnikKlasyfikacji.oblicz(przetarg, uzytkownikId);
+        StatusOperacyjny status = statusUzytkownikaRepository.findByUzytkownikIdAndPrzetargId(uzytkownikId, id)
+                .map(PrzetargStatusUzytkownika::getStatus).orElse(wynik.status());
+        return mapToResponse(przetarg, status, wynik);
     }
 
     @Transactional(readOnly = true)
@@ -162,7 +171,7 @@ public class PrzetargService {
                 .organizator(organizator)
                 .build();
         przetarg = przetargRepository.save(przetarg);
-        silnikKlasyfikacji.klasyfikuj(przetarg, silnikKlasyfikacji.idUzytkownika(organizatorId));
+        silnikKlasyfikacji.klasyfikuj(przetarg, silnikKlasyfikacji.idUzytkownika(organizatorId), organizatorId);
         return mapToResponse(przetargRepository.save(przetarg));
     }
 
@@ -172,8 +181,11 @@ public class PrzetargService {
         List<Przetarg> przetargi = przetargRepository.findByOrganizatorIdOrderByDataUtworzeniaDesc(organizatorId);
         java.util.Map<UUID, StatusOperacyjny> statusyUzytkownika = statusyUzytkownika(przetargi, uzytkownikId);
         return przetargi.stream()
-                .map(przetarg -> mapToResponse(
-                        przetarg, statusyUzytkownika.getOrDefault(przetarg.getId(), przetarg.getStatusOperacyjny())))
+                .map(przetarg -> {
+                    SilnikKlasyfikacjiPrzetargow.WynikKlasyfikacji wynik = silnikKlasyfikacji.oblicz(przetarg, uzytkownikId);
+                    return mapToResponse(przetarg,
+                            statusyUzytkownika.getOrDefault(przetarg.getId(), wynik.status()), wynik);
+                })
                 .toList();
     }
 
@@ -280,11 +292,19 @@ public class PrzetargService {
     }
 
     private PrzetargResponse mapToResponse(Przetarg przetarg, StatusOperacyjny statusOperacyjny) {
+        return mapToResponse(przetarg, statusOperacyjny, null);
+    }
+
+    private PrzetargResponse mapToResponse(
+            Przetarg przetarg,
+            StatusOperacyjny statusOperacyjny,
+            SilnikKlasyfikacjiPrzetargow.WynikKlasyfikacji wynik) {
         String status = przetarg.getStatus() == StatusPrzetargu.ZAMKNIETY
                 ? "ZAMKNIETY"
                 : przetarg.getTerminSkladaniaOfert().isAfter(LocalDateTime.now()) ? "OTWARTY" : "ZAKONCZONY";
         List<String> frazyDopasowanychSlow = new ArrayList<>();
-        for (SlowoKluczowe slowo : przetarg.getDopasowaneSlowa()) {
+        var dopasowaneSlowa = wynik == null ? przetarg.getDopasowaneSlowa() : wynik.dopasowane();
+        for (SlowoKluczowe slowo : dopasowaneSlowa) {
             frazyDopasowanychSlow.add(slowo.getFraza());
         }
         java.util.Collections.sort(frazyDopasowanychSlow);
@@ -296,6 +316,7 @@ public class PrzetargService {
                 przetarg.getLokalizacja(),
                 przetarg.getTerminSkladaniaOfert(),
                 status,
+                przetarg.getAdresZrodla(),
                 przetarg.getDataUtworzenia(),
                 przetarg.getOrganizator() == null ? null : przetarg.getOrganizator().getId(),
                 przetarg.getOrganizator() == null
@@ -303,7 +324,7 @@ public class PrzetargService {
                         : przetarg.getOrganizator().getImie() + " " + przetarg.getOrganizator().getNazwisko(),
                 ofertaRepository.countByPrzetargId(przetarg.getId()),
                 statusOperacyjny,
-                przetarg.getPunktacja(),
+                wynik == null ? przetarg.getPunktacja() : wynik.punkty(),
                 frazyDopasowanychSlow
         );
     }
