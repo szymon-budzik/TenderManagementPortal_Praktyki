@@ -71,7 +71,7 @@ public class ZabezpieczeniaConfig {
                                 "/api/analytics/**"
                         ).hasRole("ADMIN")
                         .requestMatchers(HttpMethod.GET, "/api/slowa-kluczowe/**").authenticated()
-                        .requestMatchers("/api/slowa-kluczowe/**").hasRole("ADMIN")
+                        .requestMatchers("/api/slowa-kluczowe/**").authenticated()
                         .requestMatchers("/PanelPrzetargow.html").authenticated()
                         .requestMatchers("/api/**").authenticated()
                         .anyRequest().permitAll())

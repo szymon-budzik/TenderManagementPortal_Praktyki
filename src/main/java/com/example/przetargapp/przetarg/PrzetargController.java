@@ -25,15 +25,16 @@ public class PrzetargController {
             @RequestParam(required = false) Integer maxPunktacja,
             @RequestParam(required = false) UUID slowoId,
             @RequestParam(required = false) String query,
+            @RequestParam(required = false) String zrodlo,
             Authentication authentication) {
         UUID userId = UUID.fromString(authentication.getName());
         return przetargService.listaPrzetargow(
-                status, od, doDaty, minPunktacja, maxPunktacja, slowoId, query, userId);
+                status, od, doDaty, minPunktacja, maxPunktacja, slowoId, query, zrodlo, userId);
     }
 
     @GetMapping("/filtry")
-    public OpcjeFiltrowPrzetarguResponse opcjeFiltrow() {
-        return przetargService.opcjeFiltrowPrzetargu();
+    public OpcjeFiltrowPrzetarguResponse opcjeFiltrow(Authentication authentication) {
+        return przetargService.opcjeFiltrowPrzetargu(UUID.fromString(authentication.getName()));
     }
 
     @GetMapping("/podsumowanie")

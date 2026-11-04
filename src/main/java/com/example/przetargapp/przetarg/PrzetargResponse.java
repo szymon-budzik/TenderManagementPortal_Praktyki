@@ -12,6 +12,7 @@ public record PrzetargResponse(
         String lokalizacja,
         LocalDateTime terminSkladaniaOfert,
         String status,
+        String adresZrodla,
         LocalDateTime dataUtworzenia,
         UUID organizatorId,
         String organizator,
