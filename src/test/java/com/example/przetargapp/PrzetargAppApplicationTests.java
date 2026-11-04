@@ -254,7 +254,7 @@ class PrzetargAppApplicationTests {
 				.andExpect(status().isCreated());
 		mockMvc.perform(get("/api/przetargi/filtry").session(regularSession))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.slowa.length()").value(1))
+				.andExpect(jsonPath("$.slowa.length()").value(0))
 				.andExpect(jsonPath("$.zrodla").doesNotExist());
 
 		String firstTender = mockMvc.perform(post("/api/przetargi")
@@ -334,18 +334,18 @@ class PrzetargAppApplicationTests {
 						.param("minPunktacja", "5")
 						.session(regularSession))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.length()").value(1));
+				.andExpect(jsonPath("$.length()").value(0));
 		User anotherUser = createUser("Another", "another-" + UUID.randomUUID() + "@example.com", Rola.USER);
 		MockHttpSession anotherSession = login(anotherUser.getEmail());
 		mockMvc.perform(get("/api/przetargi/{id}", tenderId).session(anotherSession))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.statusOperacyjny").value("INTERESUJACY"));
+				.andExpect(jsonPath("$.statusOperacyjny").value("NOWY"));
 		mockMvc.perform(get("/api/przetargi")
 						.param("status", "INTERESUJACY")
 						.param("minPunktacja", "5")
 						.session(anotherSession))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.length()").value(1));
+				.andExpect(jsonPath("$.length()").value(0));
 		mockMvc.perform(get("/api/analytics/przetargi").session(adminSession))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.liczbaWszystkich").value(2))

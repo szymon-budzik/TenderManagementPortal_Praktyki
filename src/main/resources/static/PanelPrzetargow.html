@@ -112,6 +112,13 @@
                         <option value="">Wszystkie słowa</option>
                     </select>
                 </label>
+                <label class="text-xs text-slate-400">Źródło
+                    <select name="zrodlo" class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white">
+                        <option value="">Wszystkie źródła</option>
+                        <option value="WŁASNE">Postępowania własne</option>
+                        <option value="ZEWNĘTRZNE">Źródła zewnętrzne</option>
+                    </select>
+                </label>
                 <div class="flex items-end gap-2 sm:col-span-2 lg:col-span-4">
                     <button class="rounded-lg bg-cyan-400 px-4 py-2 text-sm font-bold text-slate-950 hover:bg-cyan-300">Filtruj</button>
                     <button id="resetTenderFilters" type="reset" class="rounded-lg border border-slate-700 px-4 py-2 text-sm hover:border-cyan-400">Wyczyść filtry</button>
@@ -131,6 +138,7 @@
                             <tbody id="newTenders" class="divide-y divide-slate-800"></tbody>
                         </table>
                     </div>
+                    <div id="newTendersPagination" class="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400"></div>
                 </section>
                 <section id="interestingTendersSection">
                     <div class="mb-3 flex items-center justify-between">
@@ -145,6 +153,7 @@
                             <tbody id="interestingTenders" class="divide-y divide-slate-800"></tbody>
                         </table>
                     </div>
+                    <div id="interestingTendersPagination" class="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400"></div>
                 </section>
                 <section id="rejectedTendersSection">
                     <div class="mb-3 flex items-center justify-between">
@@ -159,7 +168,47 @@
                             <tbody id="rejectedTenders" class="divide-y divide-slate-800"></tbody>
                         </table>
                     </div>
+                    <div id="rejectedTendersPagination" class="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400"></div>
                 </section>
+            </div>
+        </section>
+
+        <section id="keywordRulesSection" class="rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
+            <div class="mb-4">
+                <h2 class="text-xl font-bold">Słowa kluczowe i reguły</h2>
+                <p class="mt-1 text-sm text-slate-400">Dodawaj własne frazy używane do automatycznej punktacji przetargów.</p>
+            </div>
+            <div id="keywordMessage" class="hidden rounded-lg p-3 text-sm" role="status" aria-live="polite"></div>
+            <form id="keywordForm" class="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+                <input name="id" type="hidden">
+                <label class="text-sm text-slate-300">Fraza
+                    <input name="fraza" required maxlength="200" class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white">
+                </label>
+                <label class="text-sm text-slate-300">Typ
+                    <select name="typ" class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white">
+                        <option value="POSZUKIWANE">Poszukiwane</option>
+                        <option value="WYKLUCZAJACE">Wykluczające</option>
+                    </select>
+                </label>
+                <label class="text-sm text-slate-300">Kategoria/tag
+                    <input name="kategoria" maxlength="100" class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white">
+                </label>
+                <label class="text-sm text-slate-300">Punkty (1–100)
+                    <input name="punkty" type="number" min="1" max="100" value="1" required class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white">
+                </label>
+                <label class="flex items-center gap-2 self-end pb-2 text-sm text-slate-300">
+                    <input name="aktywne" type="checkbox" checked class="accent-cyan-400"> Aktywne
+                </label>
+                <div class="flex gap-2 sm:col-span-2 lg:col-span-5">
+                    <button class="rounded-lg bg-cyan-400 px-5 py-2.5 font-bold text-slate-950">Zapisz regułę</button>
+                    <button id="cancelKeywordEdit" type="button" class="rounded-lg border border-slate-700 px-4 py-2">Wyczyść</button>
+                </div>
+            </form>
+            <div class="mt-6 overflow-x-auto">
+                <table class="w-full min-w-[680px] text-left text-sm">
+                    <thead class="border-b border-slate-800 text-xs uppercase text-slate-400"><tr><th class="px-3 py-3">Fraza</th><th class="px-3 py-3">Typ</th><th class="px-3 py-3">Kategoria</th><th class="px-3 py-3">Punkty</th><th class="px-3 py-3">Stan</th><th class="px-3 py-3">Akcje</th></tr></thead>
+                    <tbody id="userKeywords" class="divide-y divide-slate-800"></tbody>
+                </table>
             </div>
         </section>
 
@@ -261,6 +310,9 @@
             ['INTERESUJACY', 'Interesujący'],
             ['ODRZUCONY', 'Odrzucony']
         ];
+
+        const rowsPerPage = 10;
+        const tenderPages = { NOWY: 1, INTERESUJACY: 1, ODRZUCONY: 1 };
 
         function statusLabel(status) {
             return operationalStatuses.find(([value]) => value === status)?.[1] || status;
@@ -400,6 +452,7 @@
                 createText('p', '', `Kategoria: ${tender.kategoria}`),
                 createText('p', '', `Lokalizacja: ${tender.lokalizacja}`),
                 createText('p', '', `Organizator: ${tender.organizator}`),
+                createText('p', '', `Źródło: ${tender.adresZrodla ? 'zewnętrzne' : 'własne'}`),
                 createText('p', '', `Termin: ${dateFormatter.format(new Date(tender.terminSkladaniaOfert))}`),
                 createText('p', '', `Słowa: ${tender.dopasowaneSlowa?.join(', ') || 'Brak dopasowań'}`),
                 createText('p', '', `Złożone oferty: ${tender.liczbaOfert}`)
@@ -409,7 +462,7 @@
             classificationCell.className = 'px-4 py-4';
             classificationCell.append(
                 createText('p', 'font-semibold text-cyan-300', statusLabel(tender.statusOperacyjny)),
-                createText('p', 'mt-2 text-xs text-slate-400', `Punktacja: ${tender.punktacja}`),
+                createText('p', 'mt-2 text-xs text-slate-400', `Punktacja: ${tender.punktacja} pkt`),
                 createText('p', 'mt-2 text-xs text-slate-400', `Przyjmowanie ofert: ${tender.status}`)
             );
 
@@ -486,18 +539,21 @@
             const tenders = await api(`/api/przetargi${query}`);
             document.getElementById('tenderCount').textContent = `${tenders.length} postępowań`;
             const groups = [
-                { status: 'NOWY', container: 'newTenders', count: 'newTendersCount', section: 'newTendersSection' },
-                { status: 'INTERESUJACY', container: 'interestingTenders', count: 'interestingTendersCount', section: 'interestingTendersSection' },
-                { status: 'ODRZUCONY', container: 'rejectedTenders', count: 'rejectedTendersCount', section: 'rejectedTendersSection' }
+                { status: 'NOWY', container: 'newTenders', count: 'newTendersCount', section: 'newTendersSection', pagination: 'newTendersPagination' },
+                { status: 'INTERESUJACY', container: 'interestingTenders', count: 'interestingTendersCount', section: 'interestingTendersSection', pagination: 'interestingTendersPagination' },
+                { status: 'ODRZUCONY', container: 'rejectedTenders', count: 'rejectedTendersCount', section: 'rejectedTendersSection', pagination: 'rejectedTendersPagination' }
             ];
             for (const group of groups) {
                 const container = document.getElementById(group.container);
                 const matchingTenders = tenders.filter(tender => tender.statusOperacyjny === group.status);
                 document.getElementById(group.count).textContent = `${matchingTenders.length}`;
                 container.replaceChildren();
-                if (matchingTenders.length) {
-                    matchingTenders.forEach(tender => container.append(tenderRow(tender, isParticipant)));
-                }
+                const totalPages = Math.max(1, Math.ceil(matchingTenders.length / rowsPerPage));
+                tenderPages[group.status] = Math.min(tenderPages[group.status], totalPages);
+                const page = tenderPages[group.status];
+                const pageItems = matchingTenders.slice((page - 1) * rowsPerPage, page * rowsPerPage);
+                pageItems.forEach(tender => container.append(tenderRow(tender, isParticipant)));
+                renderTenderPagination(group, matchingTenders.length, page, totalPages);
                 document.getElementById(group.section).classList.toggle('hidden', matchingTenders.length === 0);
             }
             document.getElementById('tenders').classList.toggle('hidden', tenders.length === 0);
@@ -507,6 +563,23 @@
                     : 'Nie znaleziono przetargów. Wyczyść filtry albo opublikuj nowe postępowanie w formularzu powyżej.';
                 showMessage(document.getElementById('pageMessage'), message, true);
             }
+        }
+
+        function renderTenderPagination(group, total, page, totalPages) {
+            const pagination = document.getElementById(group.pagination);
+            pagination.replaceChildren();
+            if (!total) return;
+            const label = createText('span', '', `Wiersze ${(page - 1) * rowsPerPage + 1}–${Math.min(page * rowsPerPage, total)} z ${total}`);
+            const controls = document.createElement('div');
+            controls.className = 'flex items-center gap-2';
+            const previous = createText('button', 'rounded-lg border border-slate-700 px-3 py-1.5 hover:border-cyan-400 disabled:cursor-not-allowed disabled:opacity-40', '‹ Poprzednia');
+            const next = createText('button', 'rounded-lg border border-slate-700 px-3 py-1.5 hover:border-cyan-400 disabled:cursor-not-allowed disabled:opacity-40', 'Następna ›');
+            previous.disabled = page === 1;
+            next.disabled = page === totalPages;
+            previous.addEventListener('click', () => { tenderPages[group.status]--; loadTenders(); });
+            next.addEventListener('click', () => { tenderPages[group.status]++; loadTenders(); });
+            controls.append(previous, createText('span', 'min-w-16 text-center', `Strona ${page}/${totalPages}`), next);
+            pagination.append(label, controls);
         }
 
         async function loadSummary() {
@@ -524,6 +597,72 @@
             keywords.replaceChildren(new Option('Wszystkie słowa', ''));
             options.slowa.forEach(keyword => {
                 keywords.add(new Option(`${keyword.fraza} (${keyword.typ === 'POSZUKIWANE' ? 'poszukiwane' : 'wykluczające'})`, keyword.id));
+            });
+        }
+
+        function keywordCell(row, value, className = '') {
+            const cell = document.createElement('td');
+            cell.className = `px-3 py-3 ${className}`;
+            cell.textContent = value;
+            row.append(cell);
+            return cell;
+        }
+
+        function resetKeywordForm() {
+            const form = document.getElementById('keywordForm');
+            form.reset();
+            form.elements.namedItem('id').value = '';
+            form.elements.namedItem('punkty').value = '1';
+        }
+
+        async function loadUserKeywords() {
+            const keywords = await api('/api/slowa-kluczowe');
+            const container = document.getElementById('userKeywords');
+            container.replaceChildren();
+            if (!keywords.length) {
+                const row = document.createElement('tr');
+                const cell = keywordCell(row, 'Brak skonfigurowanych reguł.', 'text-slate-400');
+                cell.colSpan = 6;
+                container.append(row);
+                return;
+            }
+            keywords.forEach(keyword => {
+                const row = document.createElement('tr');
+                keywordCell(row, keyword.fraza);
+                keywordCell(row, keyword.typ === 'POSZUKIWANE' ? 'Poszukiwane' : 'Wykluczające');
+                keywordCell(row, keyword.kategoria || '—');
+                keywordCell(row, String(keyword.punkty));
+                keywordCell(row, keyword.aktywne ? 'Aktywne' : 'Nieaktywne');
+                const actions = document.createElement('td');
+                actions.className = 'flex gap-2 px-3 py-3';
+                const edit = createText('button', 'rounded border border-slate-700 px-2 py-1 hover:border-cyan-400', 'Edytuj');
+                edit.type = 'button';
+                edit.addEventListener('click', () => {
+                    const form = document.getElementById('keywordForm');
+                    form.elements.namedItem('id').value = keyword.id;
+                    form.elements.namedItem('fraza').value = keyword.fraza;
+                    form.elements.namedItem('typ').value = keyword.typ;
+                    form.elements.namedItem('kategoria').value = keyword.kategoria || '';
+                    form.elements.namedItem('punkty').value = keyword.punkty;
+                    form.elements.namedItem('aktywne').checked = keyword.aktywne;
+                    form.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                });
+                const remove = createText('button', 'rounded border border-rose-900 px-2 py-1 text-rose-300 hover:bg-rose-950', 'Usuń');
+                remove.type = 'button';
+                remove.addEventListener('click', async () => {
+                    if (!window.confirm(`Usunąć regułę „${keyword.fraza}”?`)) return;
+                    try {
+                        await api(`/api/slowa-kluczowe/${encodeURIComponent(keyword.id)}`, { method: 'DELETE' });
+                        showMessage(document.getElementById('keywordMessage'), 'Reguła została usunięta, a przetargi ponownie sklasyfikowane.', true);
+                        await loadUserKeywords();
+                        await loadTenders();
+                    } catch (error) {
+                        showMessage(document.getElementById('keywordMessage'), error.message);
+                    }
+                });
+                actions.append(edit, remove);
+                row.append(actions);
+                container.append(row);
             });
         }
 
@@ -611,7 +750,7 @@
             pageMessage.classList.add('hidden');
             try {
                 await loadFilterOptions();
-                await Promise.all([loadSummary(), loadTenders(), loadOrganizerTenders(), loadOffers()]);
+                await Promise.all([loadSummary(), loadTenders(), loadOrganizerTenders(), loadOffers(), loadUserKeywords()]);
                 await checkForNewTenders();
             } catch (error) {
                 showMessage(pageMessage, error.message);
@@ -621,11 +760,37 @@
         document.getElementById('refresh').addEventListener('click', loadAll);
         document.getElementById('tenderFilters').addEventListener('submit', event => {
             event.preventDefault();
+            Object.keys(tenderPages).forEach(status => tenderPages[status] = 1);
             loadAll();
         });
         document.getElementById('resetTenderFilters').addEventListener('click', () => {
+            Object.keys(tenderPages).forEach(status => tenderPages[status] = 1);
             setTimeout(loadAll);
         });
+        document.getElementById('keywordForm').addEventListener('submit', async event => {
+            event.preventDefault();
+            const form = event.currentTarget;
+            const data = Object.fromEntries(new FormData(form).entries());
+            const id = data.id;
+            data.aktywne = form.elements.namedItem('aktywne').checked;
+            data.punkty = Number(data.punkty);
+            delete data.id;
+            try {
+                await api(id ? `/api/slowa-kluczowe/${encodeURIComponent(id)}` : '/api/slowa-kluczowe', {
+                    method: id ? 'PUT' : 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                resetKeywordForm();
+                showMessage(document.getElementById('keywordMessage'), 'Reguła zapisana, przetargi zostały ponownie sklasyfikowane.', true);
+                await loadUserKeywords();
+                await loadFilterOptions();
+                await loadTenders();
+            } catch (error) {
+                showMessage(document.getElementById('keywordMessage'), error.message);
+            }
+        });
+        document.getElementById('cancelKeywordEdit').addEventListener('click', resetKeywordForm);
         document.getElementById('tenderForm')?.addEventListener('submit', async event => {
             event.preventDefault();
             const form = event.currentTarget;

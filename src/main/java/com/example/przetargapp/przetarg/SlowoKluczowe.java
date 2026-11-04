@@ -10,7 +10,7 @@ import java.util.UUID;
 
 @Entity
 @Table(name = "keywords", uniqueConstraints = @UniqueConstraint(
-        name = "uk_keywords_phrase_type", columnNames = {"phrase", "keyword_type"}))
+        name = "uk_keywords_owner_phrase_type", columnNames = {"owner_id", "phrase", "keyword_type"}))
 @Getter
 @Setter
 @NoArgsConstructor
@@ -20,6 +20,10 @@ public class SlowoKluczowe {
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
+
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "owner_id", nullable = false)
+    private com.example.przetargapp.user.User wlasciciel;
 
     @Column(name = "phrase", nullable = false, length = 200)
     private String fraza;

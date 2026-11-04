@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
+import org.springframework.security.core.Authentication;
 
 @RestController
 @RequestMapping("/api/slowa-kluczowe")
@@ -16,24 +17,27 @@ public class SlowoKluczoweController {
     private final SlowoKluczoweService service;
 
     @GetMapping
-    public List<SlowoKluczoweResponse> lista() {
-        return service.lista();
+    public List<SlowoKluczoweResponse> lista(Authentication authentication) {
+        return service.lista(UUID.fromString(authentication.getName()));
     }
 
     @PostMapping
-    public ResponseEntity<SlowoKluczoweResponse> utworz(@Valid @RequestBody SlowoKluczoweRequest request) {
-        return ResponseEntity.status(HttpStatus.CREATED).body(service.utworz(request));
+    public ResponseEntity<SlowoKluczoweResponse> utworz(
+            @Valid @RequestBody SlowoKluczoweRequest request, Authentication authentication) {
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(service.utworz(request, UUID.fromString(authentication.getName())));
     }
 
     @PutMapping("/{id}")
     public SlowoKluczoweResponse aktualizuj(
-            @PathVariable UUID id, @Valid @RequestBody SlowoKluczoweRequest request) {
-        return service.aktualizuj(id, request);
+            @PathVariable UUID id, @Valid @RequestBody SlowoKluczoweRequest request,
+            Authentication authentication) {
+        return service.aktualizuj(id, request, UUID.fromString(authentication.getName()));
     }
 
     @DeleteMapping("/{id}")
-    public ResponseEntity<Void> usun(@PathVariable UUID id) {
-        service.usun(id);
+    public ResponseEntity<Void> usun(@PathVariable UUID id, Authentication authentication) {
+        service.usun(id, UUID.fromString(authentication.getName()));
         return ResponseEntity.noContent().build();
     }
 }
