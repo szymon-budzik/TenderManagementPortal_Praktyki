@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from storage import (
-    load_endpoints, add_endpoint, delete_endpoint, 
+    load_endpoints, save_endpoints, add_endpoint, delete_endpoint, 
     update_endpoint, load_keywords, append_tenders_to_history
 )
 from api_client import test_connection, fetch_latest_items
@@ -18,6 +18,8 @@ def render_scheduler_controls():
     col_btn, col_interval, col_timer, col_last = st.columns([1.5, 1.5, 1.5, 2])
 
     with col_btn:
+        # Odstęp wyrównujący przycisk z polami posiadającymi etykiety
+        st.markdown("<div style='padding-top: 28px;'></div>", unsafe_allow_html=True)
         if not is_running:
             if st.button("▶️ Włącz automatyczne pobieranie", type="primary", use_container_width=True):
                 interval = st.session_state.get("scheduler_interval_val", 5)
@@ -60,9 +62,27 @@ def render():
     # --- Sekcja Automatycznego Schedulera (Live) ---
     st.subheader("Harmonogram pobierania (Scheduler)")
     render_scheduler_controls()
-    st.divider()
 
     endpoints = load_endpoints()
+
+    # Wybór źródeł dla automatycznego harmonogramu
+    if endpoints:
+        active_names = [e["name"] for e in endpoints if e.get("active", True)]
+        selected_active = st.multiselect(
+            "🎯 Źródła aktywne w harmonogramie:",
+            options=[e["name"] for e in endpoints],
+            default=active_names,
+            help="Scheduler w tle będzie automatycznie odpytywał tylko zaznaczone tutaj źródła."
+        )
+
+        # Jeśli użytkownik zmienił zaznaczenie, zapisujemy stan w endpoints.json
+        if set(selected_active) != set(active_names):
+            for ep in endpoints:
+                ep["active"] = ep["name"] in selected_active
+            save_endpoints(endpoints)
+            st.rerun()
+            
+    st.divider()
 
     # --- Sekcja: Dodawanie endpointu ---
     with st.expander("➕ Dodaj nowy endpoint", expanded=False):
@@ -100,7 +120,6 @@ def render():
 
     with col2:
         with st.popover("✏️ Edytuj"):
-            # Klucze powiązane z ID endpointu wymuszają odświeżenie formularza po zmianie w selectboxie
             edit_name = st.text_input(
                 "Nazwa", 
                 value=current_ep["name"], 
@@ -121,15 +140,7 @@ def render():
             delete_endpoint(current_ep["id"])
             st.rerun()
 
-    # --- Sekcja: Ręczny test matchera ---
-    st.divider()
-    st.subheader(f"Ręczny test na 10 rekordach: {current_ep['name']}")
-
-    keywords = load_keywords()
-    if not keywords:
-        st.warning("Uwaga: Brak zdefiniowanych słów kluczowych. Przejdź do zakładki 'Słowa Kluczowe', aby dodać reguły.")
-
-   # --- Sekcja: Ręczny test matchera ---
+    # --- Sekcja: Ręczny test matchera i skanowanie ---
     st.divider()
     st.subheader(f"Ręczny test i skanowanie: {current_ep['name']}")
 
@@ -137,7 +148,7 @@ def render():
     if not keywords:
         st.warning("Uwaga: Brak zdefiniowanych słów kluczowych. Przejdź do zakładki 'Słowa Kluczowe', aby dodać reguły.")
 
-    # Suwak wyboru limitu (np. od 10 do 200)
+    # Suwak wyboru limitu (od 10 do 200)
     wybrany_limit = st.slider(
         "Liczba ogłoszeń do pobrania:",
         min_value=10,

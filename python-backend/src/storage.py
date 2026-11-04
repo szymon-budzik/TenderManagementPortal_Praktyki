@@ -52,11 +52,17 @@ def save_endpoints(endpoints: List[Dict[str, Any]]) -> None:
         json.dump(endpoints, f, ensure_ascii=False, indent=2)
 
 
-def add_endpoint(name: str, url: str, method: str = "GET") -> None:
+def add_endpoint(name: str, url: str, method: str = "GET", active: bool = True) -> None:
     """Dodaje nowe źródło do pliku konfiguracyjnego."""
     endpoints = load_endpoints()
     new_id = max([e.get("id", 0) for e in endpoints], default=0) + 1
-    endpoints.append({"id": new_id, "name": name, "url": url, "method": method})
+    endpoints.append({
+        "id": new_id, 
+        "name": name, 
+        "url": url, 
+        "method": method, 
+        "active": active
+    })
     save_endpoints(endpoints)
 
 

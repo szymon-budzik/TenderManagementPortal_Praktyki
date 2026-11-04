@@ -62,6 +62,9 @@ class BackgroundScheduler:
             return
 
         for ep in endpoints:
+            if not ep.get("active", True):
+                continue
+            
             try:
                 success, items, _ = fetch_latest_items(ep["url"], limit=50)
                 if success and items:
