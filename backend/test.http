@@ -1,0 +1,146 @@
+### 1. Ingestion: Dodaj paczkę przetargów (wewnętrzne API pod Pythona)
+POST http://localhost:8080/api/internal/tenders/batch
+Content-Type: application/json
+
+[
+  {
+    "externalId": "BZP-2026-001",
+    "title": "Wdrożenie systemu informatycznego i oprogramowania CRM",
+    "description": "Przedmiotem zamówienia jest budowa i chmura dla urzędu.",
+    "publicationDate": "2026-11-05T12:00:00Z"
+  },
+  {
+    "externalId": "BZP-2026-002",
+    "title": "Dostawa sprzętu biurowego",
+    "description": "Zakup 10 foteli i biurek.",
+    "publicationDate": "2026-11-05T12:00:00Z"
+  }
+]
+
+### 2. Pobierz listę przetargów (domyślna paginacja i sortowanie po score)
+GET http://localhost:8080/api/tenders
+
+### 3. Filtrowanie: fraza "CRM" i minScore = 20
+GET http://localhost:8080/api/tenders?search=CRM&minScore=20
+
+### 4. Pobierz szczegóły przetargu o ID 1
+GET http://localhost:8080/api/tenders/1
+
+### 5. Zmień status przetargu o ID 1
+PATCH http://localhost:8080/api/tenders/1/status
+Content-Type: application/json
+
+{
+  "status": "REJECTED"
+}
+
+### 6. Pobierz metryki i podsumowanie pod panel analityki
+GET http://localhost:8080/api/analytics/summary
+
+### Utwórz nowego użytkownika ADMIN
+POST http://localhost:8080/api/admin/users
+Content-Type: application/json
+
+{
+  "username": "admin_user",
+  "email": "admin@przetargi.pl",
+  "password": "tajnehaslo123",
+  "role": "ROLE_ADMIN"
+}
+
+### Pobierz listę wszystkich użytkowników
+GET http://localhost:8080/api/admin/users
+
+### Zmień status użytkownika (np. deaktywacja)
+PATCH http://localhost:8080/api/admin/users/1
+Content-Type: application/json
+
+{
+  "isActive": false
+}
+
+### 1. Ingestion BEZ nagłówka API Key (powinno zwrócić 401 Unauthorized)
+POST http://localhost:8080/api/internal/tenders/batch
+Content-Type: application/json
+
+[
+  {
+    "externalId": "TEST-401",
+    "title": "Test bez klucza",
+    "publicationDate": "2026-11-05T12:00:00Z"
+  }
+]
+
+### 2. Ingestion Z POPRAWNYM nagłówkiem X-API-KEY (powinno przejść: 200 OK)
+POST http://localhost:8080/api/internal/tenders/batch
+Content-Type: application/json
+X-API-KEY: super_tajny_klucz_python_ingestion_2026
+
+[
+  {
+    "externalId": "BZP-2026-003",
+    "title": "Budowa aplikacji mobilnej dla mieszkańców",
+    "description": "Rozwój oprogramowania na Android i iOS",
+    "publicationDate": "2026-11-05T12:00:00Z"
+  }
+]
+
+### 3. Test walidacji - próba utworzenia usera ze zbyt krótkim hasłem (powinno zwrócić ładny JSON 400)
+POST http://localhost:8080/api/admin/users
+Content-Type: application/json
+
+{
+  "username": "tester",
+  "email": "tester@test.pl",
+  "password": "123",
+  "role": "ROLE_USER"
+}
+
+### 1. Pobierz wszystkie zdefiniowane źródła (panel admina)
+GET http://localhost:8080/api/admin/endpoints
+
+### 2. Dodaj nowe źródło przetargów
+POST http://localhost:8080/api/admin/endpoints
+Content-Type: application/json
+
+{
+  "name": "Nowe lokalne API przetargowe",
+  "url": "https://api.przyklad.pl/v1/tenders",
+  "httpMethod": "GET",
+  "isActive": true
+}
+
+### 3. Wyłącz (deaktywuj) endpoint o ID 2
+PUT http://localhost:8080/api/admin/endpoints/2
+Content-Type: application/json
+
+{
+  "isActive": false
+}
+
+### 4. Usuń endpoint o ID 2
+DELETE http://localhost:8080/api/admin/endpoints/2
+
+### 1. Próba pobrania przetargów BEZ tokenu (powinno zwrócić 403 / 401)
+GET http://localhost:8080/api/tenders
+
+### 2. Logowanie kontem domyślnego admina
+# @name loginAdmin
+POST http://localhost:8080/api/auth/login
+Content-Type: application/json
+
+{
+  "username": "admin",
+  "password": "admin123"
+}
+
+### 3. Zapisz wygenerowany token do zmiennej w pamięci REST Clienta
+@authToken = {{loginAdmin.response.body.token}}
+
+### 4. Pobranie przetargów Z TOKENEM (powinno zwrócić 200 OK)
+GET http://localhost:8080/api/tenders
+Authorization: Bearer {{authToken}}
+
+### 5. Pobranie listy źródeł admina Z TOKENEM ADMINA (powinno zwrócić 200 OK)
+GET http://localhost:8080/api/admin/endpoints
+Authorization: Bearer {{authToken}}

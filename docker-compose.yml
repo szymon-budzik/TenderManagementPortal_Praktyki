@@ -1,0 +1,56 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: tender-postgres
+    environment:
+      POSTGRES_DB: tender_db
+      POSTGRES_USER: tender_user
+      POSTGRES_PASSWORD: secretpassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tender_user -d tender_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  ingestion-worker:
+    build:
+      context: ./ingestion-worker
+      dockerfile: Dockerfile
+    container_name: tender-ingestion-worker
+    ports:
+      - "8000:8000"
+
+  java-backend:
+    build:
+      context: ./backend/java-backend
+      dockerfile: Dockerfile
+    container_name: tender-java-backend
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/tender_db
+      SPRING_DATASOURCE_USERNAME: tender_user
+      SPRING_DATASOURCE_PASSWORD: secretpassword
+      SCRAPER_SERVICE_URL: http://ingestion-worker:8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ingestion-worker:
+        condition: service_started
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: tender-frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - java-backend
+
+volumes:
+  postgres_data:
