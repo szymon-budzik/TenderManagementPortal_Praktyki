@@ -4,6 +4,18 @@ import { Search, Filter, RotateCcw, Trash2, Eye, X } from 'lucide-react';
 
 const STATUSES = ['NEW', 'INTERESTED'];
 
+export function getTenderScoreDisplay(tender) {
+  if (tender?.description) {
+    const line = tender.description
+      .split('\n')
+      .find((l) => l.startsWith('Punktacja kategorii:'));
+    if (line) {
+      return line.replace('Punktacja kategorii:', '').trim();
+    }
+  }
+  return `${tender?.score ?? 0} pkt`;
+}
+
 export default function TendersView() {
   const [tenders, setTenders] = useState([]);
   const [search, setSearch] = useState('');
@@ -14,7 +26,6 @@ export default function TendersView() {
   const [page, setPage] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
 
-  // Wybrany przetarg do modala ze szczegółami
   const [selectedTender, setSelectedTender] = useState(null);
 
   const fetchTenders = async () => {
@@ -121,7 +132,7 @@ export default function TendersView() {
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Tytuł, zamawiający, opis..."
+              placeholder="Tytuł, kategoria, zamawiający..."
               className="w-full pl-9 pr-3 py-2 border border-blue-300 rounded-lg text-black focus:outline-none focus:border-blue-600"
             />
           </div>
@@ -145,12 +156,12 @@ export default function TendersView() {
         </div>
 
         <div>
-          <label className="block text-xs font-bold uppercase mb-1 text-black">Min. Score</label>
+          <label className="block text-xs font-bold uppercase mb-1 text-black">Min. Score (Suma)</label>
           <input
             type="number"
             value={minScore}
             onChange={(e) => setMinScore(e.target.value)}
-            placeholder="np. 20"
+            placeholder="np. 50"
             className="w-full px-3 py-2 border border-blue-300 rounded-lg text-black focus:outline-none focus:border-blue-600"
           />
         </div>
@@ -201,7 +212,7 @@ export default function TendersView() {
             <tr className="bg-blue-600 text-white text-sm">
               <th className="p-3.5 font-bold">ID Zewn.</th>
               <th className="p-3.5 font-bold">Tytuł i skrót informacji</th>
-              <th className="p-3.5 font-bold text-center">Score</th>
+              <th className="p-3.5 font-bold text-center">Score (Kategorie)</th>
               <th className="p-3.5 font-bold">Data publikacji</th>
               <th className="p-3.5 font-bold">Status (Kliknij)</th>
               <th className="p-3.5 font-bold text-right">Akcje</th>
@@ -215,70 +226,73 @@ export default function TendersView() {
                 </td>
               </tr>
             ) : (
-              filteredTenders.map((t) => (
-                <tr
-                  key={t.id}
-                  onClick={() => setSelectedTender(t)}
-                  className="hover:bg-blue-50/80 transition cursor-pointer"
-                >
-                  <td className="p-3.5 font-mono font-semibold whitespace-nowrap">
-                    {t.externalId}
-                  </td>
-                  <td className="p-3.5">
-                    <div className="font-bold text-black">{t.title}</div>
-                    {t.description && (
-                      <div className="text-xs text-black mt-1 line-clamp-2 whitespace-pre-line">
-                        {t.description}
+              filteredTenders.map((t) => {
+                const scoreLabel = getTenderScoreDisplay(t);
+                return (
+                  <tr
+                    key={t.id}
+                    onClick={() => setSelectedTender(t)}
+                    className="hover:bg-blue-50/80 transition cursor-pointer"
+                  >
+                    <td className="p-3.5 font-mono font-semibold whitespace-nowrap">
+                      {t.externalId}
+                    </td>
+                    <td className="p-3.5">
+                      <div className="font-bold text-black">{t.title}</div>
+                      {t.description && (
+                        <div className="text-xs text-black mt-1 line-clamp-2 whitespace-pre-line">
+                          {t.description}
+                        </div>
+                      )}
+                    </td>
+                    <td className="p-3.5 text-center">
+                      <span className="inline-block px-3 py-1.5 rounded-lg font-extrabold text-xs bg-blue-100 border-2 border-blue-600 text-black">
+                        {scoreLabel}
+                      </span>
+                    </td>
+                    <td className="p-3.5 whitespace-nowrap">
+                      {t.publicationDate
+                        ? new Date(t.publicationDate).toLocaleDateString('pl-PL')
+                        : '—'}
+                    </td>
+                    <td className="p-3.5 whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={(e) => handleToggleStatus(e, t)}
+                        title="Kliknij, aby zmienić status pomiędzy NEW a INTERESTED"
+                        className={`px-3.5 py-1.5 rounded-lg text-xs font-extrabold border-2 shadow-xs transition transform active:scale-95 cursor-pointer ${
+                          t.status === 'INTERESTED'
+                            ? 'bg-green-400 hover:bg-green-500 border-green-800 text-black'
+                            : 'bg-blue-100 hover:bg-blue-200 border-blue-600 text-black'
+                        }`}
+                      >
+                        {t.status}
+                      </button>
+                    </td>
+                    <td className="p-3.5 text-right whitespace-nowrap">
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedTender(t);
+                          }}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 bg-white border border-blue-400 hover:bg-blue-50 text-black rounded-lg font-bold text-xs cursor-pointer"
+                        >
+                          <Eye size={14} /> Szczegóły
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => handleDeleteTender(e, t.id)}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 bg-white border border-red-400 hover:bg-red-100 text-black rounded-lg font-bold text-xs cursor-pointer"
+                        >
+                          <Trash2 size={14} /> Usuń
+                        </button>
                       </div>
-                    )}
-                  </td>
-                  <td className="p-3.5 text-center whitespace-nowrap">
-                    <span className="inline-block px-2.5 py-1 rounded-md font-extrabold bg-blue-100 border border-blue-500 text-black">
-                      {t.score} pkt
-                    </span>
-                  </td>
-                  <td className="p-3.5 whitespace-nowrap">
-                    {t.publicationDate
-                      ? new Date(t.publicationDate).toLocaleDateString('pl-PL')
-                      : '—'}
-                  </td>
-                  <td className="p-3.5 whitespace-nowrap">
-                    <button
-                      type="button"
-                      onClick={(e) => handleToggleStatus(e, t)}
-                      title="Kliknij, aby zmienić status pomiędzy NEW a INTERESTED"
-                      className={`px-3.5 py-1.5 rounded-lg text-xs font-extrabold border-2 shadow-xs transition transform active:scale-95 cursor-pointer ${
-                        t.status === 'INTERESTED'
-                          ? 'bg-green-400 hover:bg-green-500 border-green-800 text-black'
-                          : 'bg-blue-100 hover:bg-blue-200 border-blue-600 text-black'
-                      }`}
-                    >
-                      {t.status}
-                    </button>
-                  </td>
-                  <td className="p-3.5 text-right whitespace-nowrap">
-                    <div className="flex items-center justify-end gap-2">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedTender(t);
-                        }}
-                        className="inline-flex items-center gap-1 px-3 py-1.5 bg-white border border-blue-400 hover:bg-blue-50 text-black rounded-lg font-bold text-xs cursor-pointer"
-                      >
-                        <Eye size={14} /> Szczegóły
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(e) => handleDeleteTender(e, t.id)}
-                        className="inline-flex items-center gap-1 px-3 py-1.5 bg-white border border-red-400 hover:bg-red-100 text-black rounded-lg font-bold text-xs cursor-pointer"
-                      >
-                        <Trash2 size={14} /> Usuń
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>
@@ -335,8 +349,13 @@ export default function TendersView() {
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div className="p-3 bg-blue-50/70 border border-blue-200 rounded-xl">
-                <div className="text-xs font-bold uppercase">Wynik punktowy</div>
-                <div className="text-lg font-extrabold mt-0.5">{selectedTender.score} pkt</div>
+                <div className="text-xs font-bold uppercase">Punktacja kategorii</div>
+                <div className="text-sm font-extrabold mt-1">
+                  {getTenderScoreDisplay(selectedTender)}
+                </div>
+                <div className="text-[11px] font-semibold mt-0.5">
+                  Suma: {selectedTender.score} pkt
+                </div>
               </div>
               <div className="p-3 bg-blue-50/70 border border-blue-200 rounded-xl">
                 <div className="text-xs font-bold uppercase">Data publikacji</div>

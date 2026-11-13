@@ -6,11 +6,18 @@ import com.przetargi.java_backend.repository.KeywordCategoryRepository;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 
-import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/keywords")
@@ -24,38 +31,37 @@ public class KeywordCategoryController {
 
     @GetMapping
     public ResponseEntity<List<KeywordCategoryDto>> getAll() {
-        return ResponseEntity.ok(
-            repository.findAll().stream().map(KeywordCategoryDto::fromEntity).toList()
-        );
+        List<KeywordCategoryDto> list = new ArrayList<>();
+        for (KeywordCategory entity : repository.findAll()) {
+            list.add(KeywordCategoryDto.fromEntity(entity));
+        }
+        return ResponseEntity.ok(list);
     }
 
     @PostMapping
     public ResponseEntity<KeywordCategoryDto> create(@Valid @RequestBody KeywordCategoryDto dto) {
-        boolean excluded = Boolean.TRUE.equals(dto.getIsExcluded());
-        int score = excluded ? 1 : clampScore(dto.getScore());
-
-        KeywordCategory entity = KeywordCategory.builder()
-            .name(dto.getName().trim())
-            .keywords(normalizeKeywords(dto.getKeywords()))
-            .score(score)
-            .isExcluded(excluded)
-            .build();
+        KeywordCategory entity = new KeywordCategory();
+        entity.setName(dto.getName().trim());
+        entity.setKeywords(normalizeKeywordsWithWeights(dto.getKeywords()));
+        entity.setScore(50);
+        entity.setIsExcluded(false);
 
         return ResponseEntity.status(HttpStatus.CREATED)
-            .body(KeywordCategoryDto.fromEntity(repository.save(entity)));
+                .body(KeywordCategoryDto.fromEntity(repository.save(entity)));
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<KeywordCategoryDto> update(@PathVariable Long id,
-                                                     @Valid @RequestBody KeywordCategoryDto dto) {
+    public ResponseEntity<KeywordCategoryDto> update(
+            @PathVariable Long id,
+            @Valid @RequestBody KeywordCategoryDto dto
+    ) {
         KeywordCategory entity = repository.findById(id)
-            .orElseThrow(() -> new IllegalArgumentException("Nie znaleziono kategorii o ID: " + id));
+                .orElseThrow(() -> new IllegalArgumentException("Nie znaleziono kategorii o ID: " + id));
 
-        boolean excluded = Boolean.TRUE.equals(dto.getIsExcluded());
         entity.setName(dto.getName().trim());
-        entity.setKeywords(normalizeKeywords(dto.getKeywords()));
-        entity.setIsExcluded(excluded);
-        entity.setScore(excluded ? 1 : clampScore(dto.getScore()));
+        entity.setKeywords(normalizeKeywordsWithWeights(dto.getKeywords()));
+        entity.setScore(50);
+        entity.setIsExcluded(false);
 
         return ResponseEntity.ok(KeywordCategoryDto.fromEntity(repository.save(entity)));
     }
@@ -74,25 +80,45 @@ public class KeywordCategoryController {
         return ResponseEntity.badRequest().body(new ErrorResponse(ex.getMessage()));
     }
 
-    public static class ErrorResponse {
-        private final String message;
-        public ErrorResponse(String message) { this.message = message; }
-        public String getMessage() { return message; }
-    }
+    public record ErrorResponse(String message) {}
 
-    private String normalizeKeywords(String raw) {
-        String cleaned = Arrays.stream(raw.split(","))
-            .map(String::trim)
-            .filter(s -> !s.isEmpty())
-            .collect(Collectors.joining(", "));
-        if (cleaned.isEmpty()) {
+    private String normalizeKeywordsWithWeights(String raw) {
+        if (raw == null || raw.isBlank()) {
             throw new IllegalArgumentException("Podaj przynajmniej jedno słowo kluczowe.");
         }
-        return cleaned;
-    }
+        String[] parts = raw.split(",");
+        List<String> formatted = new ArrayList<>();
 
-    private int clampScore(Integer score) {
-        if (score == null) return 10;
-        return Math.max(1, Math.min(100, score));
+        for (String part : parts) {
+            String trimmed = part.trim();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            int colonIdx = trimmed.lastIndexOf(':');
+            if (colonIdx > 0) {
+                String word = trimmed.substring(0, colonIdx).trim();
+                String suffix = trimmed.substring(colonIdx + 1).trim().toUpperCase();
+                if (word.isEmpty()) {
+                    continue;
+                }
+                if ("EXCLUDED".equals(suffix)) {
+                    formatted.add(word + ":EXCLUDED");
+                } else {
+                    try {
+                        int weight = Math.max(1, Math.min(100, Integer.parseInt(suffix)));
+                        formatted.add(word + ":" + weight);
+                    } catch (NumberFormatException e) {
+                        formatted.add(word + ":50");
+                    }
+                }
+            } else {
+                formatted.add(trimmed + ":50");
+            }
+        }
+
+        if (formatted.isEmpty()) {
+            throw new IllegalArgumentException("Podaj przynajmniej jedno poprawne słowo kluczowe.");
+        }
+        return String.join(", ", formatted);
     }
 }

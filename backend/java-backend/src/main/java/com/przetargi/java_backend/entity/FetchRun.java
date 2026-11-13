@@ -23,7 +23,7 @@ public class FetchRun {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "source_type", nullable = false, length = 30)
+    @Column(name = "source_type", nullable = false, length = 150)
     private String sourceType;
 
     @Column(name = "sources_summary", columnDefinition = "TEXT")

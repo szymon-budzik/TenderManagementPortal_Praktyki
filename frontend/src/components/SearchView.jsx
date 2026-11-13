@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import api from '../api';
 import { Play, Globe, KeyRound, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
+import { parseKeywordsString } from './KeywordsView';
 
 export default function SearchView() {
   const [endpoints, setEndpoints] = useState([]);
@@ -322,10 +323,7 @@ export default function SearchView() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {categories.map((cat) => {
               const checked = selectedCategoryIds.includes(cat.id);
-              const words = (cat.keywords || '')
-                .split(',')
-                .map((w) => w.trim())
-                .filter(Boolean);
+              const parsedWords = parseKeywordsString(cat.keywords);
 
               return (
                 <label
@@ -343,25 +341,20 @@ export default function SearchView() {
                     className="w-5 h-5 mt-0.5 accent-blue-600 cursor-pointer"
                   />
                   <div className="flex-1">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-bold text-sm text-black">{cat.name}</span>
-                      {cat.isExcluded ? (
-                        <span className="px-2.5 py-0.5 rounded text-xs font-extrabold bg-red-400 border border-red-800 text-black">
-                          WYKLUCZ
-                        </span>
-                      ) : (
-                        <span className="px-2.5 py-0.5 rounded text-xs font-extrabold bg-blue-100 border border-blue-600 text-black">
-                          +{cat.score} pkt
-                        </span>
-                      )}
+                    <div className="font-extrabold text-sm text-black">
+                      Nazwa kategorii: {cat.name}
                     </div>
-                    <div className="flex flex-wrap gap-1 mt-2">
-                      {words.map((w, idx) => (
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      {parsedWords.map((kw, idx) => (
                         <span
                           key={idx}
-                          className="px-2 py-0.5 bg-white border border-blue-200 rounded text-[11px] font-semibold text-black"
+                          className={`px-2.5 py-0.5 rounded text-xs font-extrabold border ${
+                            kw.isExcluded
+                              ? 'bg-red-400 border-red-800 text-black'
+                              : 'bg-white border-blue-300 text-black'
+                          }`}
                         >
-                          {w}
+                          {kw.isExcluded ? kw.word : `${kw.word}: ${kw.score}`}
                         </span>
                       ))}
                     </div>

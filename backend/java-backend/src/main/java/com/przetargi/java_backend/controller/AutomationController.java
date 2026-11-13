@@ -1,10 +1,13 @@
 package com.przetargi.java_backend.controller;
 
+import com.przetargi.java_backend.entity.AutomationProfile;
 import com.przetargi.java_backend.entity.CronConfig;
 import com.przetargi.java_backend.entity.FetchRun;
+import com.przetargi.java_backend.repository.AutomationProfileRepository;
 import com.przetargi.java_backend.repository.CronConfigRepository;
 import com.przetargi.java_backend.repository.FetchRunRepository;
 import com.przetargi.java_backend.service.TenderExecutionService;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -27,16 +30,91 @@ public class AutomationController {
     private final TenderExecutionService executionService;
     private final FetchRunRepository fetchRunRepository;
     private final CronConfigRepository cronConfigRepository;
+    private final AutomationProfileRepository profileRepository;
 
     public AutomationController(
             TenderExecutionService executionService,
             FetchRunRepository fetchRunRepository,
-            CronConfigRepository cronConfigRepository
+            CronConfigRepository cronConfigRepository,
+            AutomationProfileRepository profileRepository
     ) {
         this.executionService = executionService;
         this.fetchRunRepository = fetchRunRepository;
         this.cronConfigRepository = cronConfigRepository;
+        this.profileRepository = profileRepository;
     }
+
+    // --- PROFILE AUTOMATYZACJI ---
+
+    @GetMapping("/profiles")
+    public ResponseEntity<List<AutomationProfile>> getProfiles() {
+        return ResponseEntity.ok(profileRepository.findAllByOrderByIdAsc());
+    }
+
+    @PostMapping("/profiles")
+    public ResponseEntity<AutomationProfile> createProfile(@RequestBody AutomationProfile incoming) {
+        if (incoming.getName() == null || incoming.getName().isBlank()) {
+            throw new IllegalArgumentException("Nazwa profilu jest wymagana.");
+        }
+        AutomationProfile p = new AutomationProfile();
+        p.setName(incoming.getName().trim());
+        p.setEnabled(Boolean.TRUE.equals(incoming.getEnabled()));
+        p.setCronTime(incoming.getCronTime() != null && !incoming.getCronTime().isBlank() ? incoming.getCronTime().trim() : "08:00");
+        p.setMatchMode(incoming.getMatchMode() != null ? incoming.getMatchMode() : "ANY");
+        p.setEndpointIds(incoming.getEndpointIds() != null ? incoming.getEndpointIds() : "");
+        p.setCategoryIds(incoming.getCategoryIds() != null ? incoming.getCategoryIds() : "");
+        p.setRecipientEmails(incoming.getRecipientEmails() != null ? incoming.getRecipientEmails().trim() : "");
+
+        return ResponseEntity.status(HttpStatus.CREATED).body(profileRepository.save(p));
+    }
+
+    @PutMapping("/profiles/{id}")
+    public ResponseEntity<AutomationProfile> updateProfile(
+            @PathVariable Long id,
+            @RequestBody AutomationProfile incoming
+    ) {
+        AutomationProfile p = profileRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Nie znaleziono profilu o ID: " + id));
+
+        if (incoming.getName() != null && !incoming.getName().isBlank()) {
+            p.setName(incoming.getName().trim());
+        }
+        if (incoming.getEnabled() != null) {
+            p.setEnabled(incoming.getEnabled());
+        }
+        if (incoming.getCronTime() != null && !incoming.getCronTime().isBlank()) {
+            p.setCronTime(incoming.getCronTime().trim());
+        }
+        if (incoming.getMatchMode() != null) {
+            p.setMatchMode(incoming.getMatchMode());
+        }
+        if (incoming.getEndpointIds() != null) {
+            p.setEndpointIds(incoming.getEndpointIds());
+        }
+        if (incoming.getCategoryIds() != null) {
+            p.setCategoryIds(incoming.getCategoryIds());
+        }
+        if (incoming.getRecipientEmails() != null) {
+            p.setRecipientEmails(incoming.getRecipientEmails().trim());
+        }
+
+        return ResponseEntity.ok(profileRepository.save(p));
+    }
+
+    @DeleteMapping("/profiles/{id}")
+    public ResponseEntity<Void> deleteProfile(@PathVariable Long id) {
+        if (profileRepository.existsById(id)) {
+            profileRepository.deleteById(id);
+        }
+        return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/profiles/{id}/trigger")
+    public ResponseEntity<TenderExecutionService.ExecutionSummary> triggerProfileNow(@PathVariable Long id) {
+        return ResponseEntity.ok(executionService.executeProfileNow(id));
+    }
+
+    // --- HISTORIA POBRAŃ I KONFIGURACJA SMTP ---
 
     @GetMapping("/runs")
     public ResponseEntity<List<FetchRunDto>> getRuns() {
@@ -66,34 +144,18 @@ public class AutomationController {
     }
 
     @GetMapping("/cron")
-    public ResponseEntity<CronConfig> getCronConfig() {
+    public ResponseEntity<CronConfig> getSmtpConfig() {
         return ResponseEntity.ok(executionService.getOrCreateCronConfig());
     }
 
     @PutMapping("/cron")
-    public ResponseEntity<CronConfig> updateCronConfig(@RequestBody CronConfig incoming) {
+    public ResponseEntity<CronConfig> updateSmtpConfig(@RequestBody CronConfig incoming) {
         CronConfig cfg = executionService.getOrCreateCronConfig();
-        cfg.setEnabled(Boolean.TRUE.equals(incoming.getEnabled()));
-        if (incoming.getCronTime() != null && !incoming.getCronTime().isBlank()) {
-            cfg.setCronTime(incoming.getCronTime().trim());
-        }
-        if (incoming.getMatchMode() != null) {
-            cfg.setMatchMode(incoming.getMatchMode());
-        }
-        cfg.setEndpointIds(incoming.getEndpointIds() != null ? incoming.getEndpointIds() : "");
-        cfg.setCategoryIds(incoming.getCategoryIds() != null ? incoming.getCategoryIds() : "");
-        cfg.setRecipientEmails(incoming.getRecipientEmails() != null ? incoming.getRecipientEmails() : "");
         cfg.setSmtpHost(incoming.getSmtpHost() != null ? incoming.getSmtpHost().trim() : "");
         cfg.setSmtpPort(incoming.getSmtpPort() != null ? incoming.getSmtpPort() : 587);
         cfg.setSmtpUsername(incoming.getSmtpUsername() != null ? incoming.getSmtpUsername().trim() : "");
         cfg.setSmtpPassword(incoming.getSmtpPassword() != null ? incoming.getSmtpPassword() : "");
-
         return ResponseEntity.ok(cronConfigRepository.save(cfg));
-    }
-
-    @PostMapping("/cron/trigger")
-    public ResponseEntity<TenderExecutionService.ExecutionSummary> triggerCronNow() {
-        return ResponseEntity.ok(executionService.executeCronJobNow());
     }
 
     @PostMapping("/runs/export")

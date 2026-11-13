@@ -2,8 +2,10 @@ import base64
 import hashlib
 import io
 import smtplib
+from datetime import datetime
 from email.message import EmailMessage
 from typing import List, Optional
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
@@ -23,6 +25,7 @@ class TenderExcelItem(BaseModel):
     externalId: str
     title: str
     score: int
+    scoreBreakdown: Optional[str] = None
     status: str
     publicationDate: Optional[str] = None
     runInfo: Optional[str] = None
@@ -52,6 +55,12 @@ def make_id(prefix: str, text: str) -> str:
     return f"{prefix}-{digest}"
 
 
+def build_dated_filename() -> str:
+    now_pl = datetime.now(ZoneInfo("Europe/Warsaw"))
+    stamp = now_pl.strftime("%Y-%m-%d_%H-%M")
+    return f"raport_przetargi_{stamp}.xlsx"
+
+
 @app.post("/scrape")
 def scrape_page(req: ScrapeRequest):
     headers = {
@@ -67,7 +76,6 @@ def scrape_page(req: ScrapeRequest):
     items = []
     seen_titles = set()
 
-    # 1. Próba ekstrakcji tabel HTML za pomocą PANDAS
     try:
         tables = pd.read_html(io.StringIO(html_text))
         for df in tables:
@@ -82,7 +90,7 @@ def scrape_page(req: ScrapeRequest):
                 if len(title) < 12 or title.lower() in seen_titles:
                     continue
                 seen_titles.add(title.lower())
-                desc_parts = [f"{col}: { str(row[col]).strip() }" for col in df.columns if str(row[col]).strip()]
+                desc_parts = [f"{col}: {str(row[col]).strip()}" for col in df.columns if str(row[col]).strip()]
                 items.append({
                     "externalId": make_id("TBL", req.url + title),
                     "title": title[:280],
@@ -91,7 +99,6 @@ def scrape_page(req: ScrapeRequest):
     except Exception:
         pass
 
-    # 2. Ekstrakcja struktury HTML za pomocą BEAUTIFULSOUP
     soup = BeautifulSoup(html_text, "lxml")
     for tag in soup(["script", "style", "nav", "footer", "header", "noscript"]):
         tag.decompose()
@@ -141,10 +148,12 @@ def scrape_page(req: ScrapeRequest):
 def build_excel_bytes(tenders: List[TenderExcelItem]) -> bytes:
     rows = []
     for t in tenders:
+        score_display = t.scoreBreakdown if (t.scoreBreakdown and t.scoreBreakdown.strip()) else f"{t.score} pkt"
         rows.append({
             "ID Zewnętrzne": t.externalId,
             "Tytuł przetargu": t.title,
-            "Punkty (Score)": t.score,
+            "Punkty (Score)": score_display,
+            "Suma punktów": t.score,
             "Status": t.status,
             "Data publikacji": t.publicationDate or "",
             "Pobranie": t.runInfo or "",
@@ -152,7 +161,7 @@ def build_excel_bytes(tenders: List[TenderExcelItem]) -> bytes:
         })
 
     df = pd.DataFrame(rows) if rows else pd.DataFrame(columns=[
-        "ID Zewnętrzne", "Tytuł przetargu", "Punkty (Score)", "Status", "Data publikacji", "Pobranie", "Pełne szczegóły"
+        "ID Zewnętrzne", "Tytuł przetargu", "Punkty (Score)", "Suma punktów", "Status", "Data publikacji", "Pobranie", "Pełne szczegóły"
     ])
 
     output = io.BytesIO()
@@ -171,8 +180,9 @@ def build_excel_bytes(tenders: List[TenderExcelItem]) -> bytes:
 def export_excel(req: ExcelExportRequest):
     excel_bytes = build_excel_bytes(req.tenders)
     b64 = base64.b64encode(excel_bytes).decode("ascii")
+    filename = build_dated_filename()
     return {
-        "filename": "raport_przetargi.xlsx",
+        "filename": filename,
         "base64": b64,
         "count": len(req.tenders)
     }
@@ -185,31 +195,33 @@ def email_excel(req: EmailExcelRequest):
 
     excel_bytes = build_excel_bytes(req.tenders)
     b64 = base64.b64encode(excel_bytes).decode("ascii")
+    filename = build_dated_filename()
 
     smtp_cfg = req.smtp
     if not smtp_cfg or not smtp_cfg.host or not smtp_cfg.username or not smtp_cfg.password:
         return {
             "sent": False,
+            "filename": filename,
             "base64": b64,
             "message": (
-                f"Wygenerowano plik Excel ({len(req.tenders)} przetargów) dla: {', '.join(req.emails)}. "
-                "Aby wysłać wiadomość przez zewnętrzny serwer pocztowy, uzupełnij dane SMTP w sekcji Konfiguracji SMTP."
+                f"Wygenerowano plik {filename} ({len(req.tenders)} przetargów) dla: {', '.join(req.emails)}. "
+                "Aby wysłać wiadomość przez serwer pocztowy, uzupełnij dane w Konfiguracji SMTP."
             )
         }
 
     try:
         msg = EmailMessage()
-        msg["Subject"] = req.subject or "Raport przetargow"
+        msg["Subject"] = f"{req.subject or 'Raport przetargow'} ({filename})"
         msg["From"] = smtp_cfg.username
         msg["To"] = ", ".join(req.emails)
         msg.set_content(
-            f"W załączniku znajduje się wygenerowany arkusz Excel zawierający {len(req.tenders)} przetargów."
+            f"W załączniku znajduje się wygenerowany arkusz Excel ({filename}) zawierający {len(req.tenders)} przetargów."
         )
         msg.add_attachment(
             excel_bytes,
             maintype="application",
             subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            filename="raport_przetargi.xlsx"
+            filename=filename
         )
 
         port = smtp_cfg.port or 587
@@ -225,8 +237,9 @@ def email_excel(req: EmailExcelRequest):
 
         return {
             "sent": True,
+            "filename": filename,
             "base64": b64,
-            "message": f"Wysłano plik Excel ({len(req.tenders)} przetargów) na adresy: {', '.join(req.emails)}."
+            "message": f"Wysłano plik {filename} ({len(req.tenders)} przetargów) na adresy: {', '.join(req.emails)}."
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Błąd wysyłki SMTP: {str(e)}")

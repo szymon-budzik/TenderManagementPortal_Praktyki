@@ -1,12 +1,14 @@
 package com.przetargi.java_backend.service;
 
 import com.przetargi.java_backend.entity.ApiEndpoint;
+import com.przetargi.java_backend.entity.AutomationProfile;
 import com.przetargi.java_backend.entity.CronConfig;
 import com.przetargi.java_backend.entity.FetchRun;
 import com.przetargi.java_backend.entity.KeywordCategory;
 import com.przetargi.java_backend.entity.Tender;
 import com.przetargi.java_backend.entity.enums.TenderStatus;
 import com.przetargi.java_backend.repository.ApiEndpointRepository;
+import com.przetargi.java_backend.repository.AutomationProfileRepository;
 import com.przetargi.java_backend.repository.CronConfigRepository;
 import com.przetargi.java_backend.repository.FetchRunRepository;
 import com.przetargi.java_backend.repository.KeywordCategoryRepository;
@@ -23,41 +25,49 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 @EnableScheduling
 public class TenderExecutionService {
+
+    private static final ZoneId POLAND_ZONE = ZoneId.of("Europe/Warsaw");
 
     private final ApiEndpointRepository endpointRepository;
     private final KeywordCategoryRepository keywordCategoryRepository;
     private final TenderRepository tenderRepository;
     private final FetchRunRepository fetchRunRepository;
     private final CronConfigRepository cronConfigRepository;
+    private final AutomationProfileRepository profileRepository;
 
     @Value("${SCRAPER_SERVICE_URL:http://ingestion-worker:8000}")
     private String scraperServiceUrl;
 
-    private String lastTriggeredMinute = "";
+    private final Map<Long, String> lastTriggeredMinuteByProfile = new ConcurrentHashMap<>();
 
     public TenderExecutionService(
             ApiEndpointRepository endpointRepository,
             KeywordCategoryRepository keywordCategoryRepository,
             TenderRepository tenderRepository,
             FetchRunRepository fetchRunRepository,
-            CronConfigRepository cronConfigRepository
+            CronConfigRepository cronConfigRepository,
+            AutomationProfileRepository profileRepository
     ) {
         this.endpointRepository = endpointRepository;
         this.keywordCategoryRepository = keywordCategoryRepository;
         this.tenderRepository = tenderRepository;
         this.fetchRunRepository = fetchRunRepository;
         this.cronConfigRepository = cronConfigRepository;
+        this.profileRepository = profileRepository;
     }
 
     public CronConfig getOrCreateCronConfig() {
@@ -68,47 +78,42 @@ public class TenderExecutionService {
         });
     }
 
-    @Scheduled(fixedRate = 30000)
-    public void checkAndRunScheduledCron() {
-        CronConfig cfg = getOrCreateCronConfig();
-        if (!Boolean.TRUE.equals(cfg.getEnabled())) {
-            return;
-        }
-        String nowHm = LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm"));
-        if (nowHm.equals(cfg.getCronTime()) && !nowHm.equals(lastTriggeredMinute)) {
-            lastTriggeredMinute = nowHm;
-            executeCronJobNow();
+    @Scheduled(fixedRate = 20000)
+    public void checkAndRunScheduledProfiles() {
+        String nowHm = LocalTime.now(POLAND_ZONE).format(DateTimeFormatter.ofPattern("HH:mm"));
+        List<AutomationProfile> profiles = profileRepository.findAll();
+
+        for (AutomationProfile profile : profiles) {
+            if (!Boolean.TRUE.equals(profile.getEnabled())) {
+                continue;
+            }
+            String lastMinute = lastTriggeredMinuteByProfile.getOrDefault(profile.getId(), "");
+            if (nowHm.equals(profile.getCronTime()) && !nowHm.equals(lastMinute)) {
+                lastTriggeredMinuteByProfile.put(profile.getId(), nowHm);
+                executeProfileNow(profile.getId());
+            }
         }
     }
 
-    public ExecutionSummary executeCronJobNow() {
-        CronConfig cfg = getOrCreateCronConfig();
-        List<Long> epIds = parseIds(cfg.getEndpointIds());
-        if (epIds.isEmpty()) {
-            for (ApiEndpoint ep : endpointRepository.findAll()) {
-                if (Boolean.TRUE.equals(ep.getIsActive())) {
-                    epIds.add(ep.getId());
-                }
-            }
-        }
+    public ExecutionSummary executeProfileNow(Long profileId) {
+        AutomationProfile profile = profileRepository.findById(profileId)
+                .orElseThrow(() -> new IllegalArgumentException("Nie znaleziono profilu o ID: " + profileId));
 
-        List<Long> catIds = parseIds(cfg.getCategoryIds());
-        if (catIds.isEmpty()) {
-            for (KeywordCategory cat : keywordCategoryRepository.findAll()) {
-                catIds.add(cat.getId());
-            }
-        }
+        List<Long> epIds = parseIds(profile.getEndpointIds());
+        List<Long> catIds = parseIds(profile.getCategoryIds());
 
-        ExecutionSummary summary = executeSearch(epIds, catIds, cfg.getMatchMode(), "CRON");
+        String runSourceLabel = "CRON [" + profile.getName() + "]";
+        ExecutionSummary summary = executeSearch(epIds, catIds, profile.getMatchMode(), runSourceLabel);
+
         String statusMsg = "Zapisano: " + summary.savedCount() + " (Pobrano: " + summary.totalFetched() + ")";
 
-        List<String> emails = parseEmails(cfg.getRecipientEmails());
+        List<String> emails = parseEmails(profile.getRecipientEmails());
         if (!emails.isEmpty() && summary.fetchRunId() != null) {
             try {
                 EmailDispatchResult mailRes = sendRunsToEmails(
                         List.of(summary.fetchRunId()),
                         emails,
-                        "Automatyczny raport Cron - Przetargi"
+                        "Raport Cron [" + profile.getName() + "] - Przetargi"
                 );
                 statusMsg += " | Email: " + mailRes.message();
             } catch (Exception e) {
@@ -116,9 +121,9 @@ public class TenderExecutionService {
             }
         }
 
-        cfg.setLastRunAt(OffsetDateTime.now());
-        cfg.setLastRunStatus(statusMsg);
-        cronConfigRepository.save(cfg);
+        profile.setLastRunAt(OffsetDateTime.now(POLAND_ZONE));
+        profile.setLastRunStatus(statusMsg);
+        profileRepository.save(profile);
 
         return summary;
     }
@@ -136,16 +141,6 @@ public class TenderExecutionService {
         List<KeywordCategory> selectedCategories = keywordCategoryRepository.findAllById(
                 categoryIds != null ? categoryIds : List.of()
         );
-
-        List<KeywordCategory> excludedCategories = new ArrayList<>();
-        List<KeywordCategory> scoringCategories = new ArrayList<>();
-        for (KeywordCategory c : selectedCategories) {
-            if (Boolean.TRUE.equals(c.getIsExcluded())) {
-                excludedCategories.add(c);
-            } else {
-                scoringCategories.add(c);
-            }
-        }
 
         int totalFetched = 0;
         int savedCount = 0;
@@ -168,7 +163,7 @@ public class TenderExecutionService {
                 if ("SCRAPER".equalsIgnoreCase(ep.getHttpMethod())) {
                     rawItems = callPythonScraper(client, jsonParser, ep);
                 } else {
-                    rawItems = callStandardHttpApi(client, jsonParser, ep);
+                    rawItems = callStandardHttpApiWithPagination(client, jsonParser, ep);
                 }
 
                 int epSaved = 0;
@@ -186,53 +181,48 @@ public class TenderExecutionService {
 
                     String combinedText = (title + " " + (description != null ? description : "")).toLowerCase();
 
-                    boolean excluded = false;
-                    for (KeywordCategory exCat : excludedCategories) {
-                        if (matchesCategory(combinedText, exCat, requireAllWords)) {
-                            excluded = true;
-                            break;
-                        }
-                    }
-
-                    if (excluded) {
+                    if (containsAnyExcludedWord(combinedText, selectedCategories)) {
                         excludedCount++;
                         continue;
                     }
 
-                    int calculatedScore = 0;
-                    List<String> matchedCatNames = new ArrayList<>();
-                    for (KeywordCategory scCat : scoringCategories) {
-                        if (matchesCategory(combinedText, scCat, requireAllWords)) {
-                            int pts = scCat.getScore() != null ? scCat.getScore() : 0;
-                            calculatedScore += pts;
-                            matchedCatNames.add(scCat.getName() + " (+" + pts + " pkt)");
+                    int totalScore = 0;
+                    List<String> categoryBreakdowns = new ArrayList<>();
+
+                    for (KeywordCategory cat : selectedCategories) {
+                        int catScore = calculateCategoryScore(combinedText, cat, requireAllWords);
+                        if (catScore > 0) {
+                            totalScore += catScore;
+                            categoryBreakdowns.add(cat.getName() + ": " + catScore);
                         }
                     }
 
-                    if (calculatedScore <= 0) {
+                    if (totalScore <= 0 || categoryBreakdowns.isEmpty()) {
                         zeroScoreSkippedCount++;
                         continue;
                     }
 
                     final String finalExtId = externalId;
                     final String finalTitle = title.trim();
-                    final String matchedInfo = "Dopasowane kategorie: " + String.join(", ", matchedCatNames);
+                    final String breakdownStr = String.join(" / ", categoryBreakdowns);
+                    final String breakdownLine = "Punktacja kategorii: " + breakdownStr;
                     final String finalDesc = (description != null && !description.isBlank())
-                            ? description.trim() + "\n" + matchedInfo
-                            : matchedInfo;
+                            ? breakdownLine + "\n" + description.trim()
+                            : breakdownLine;
+                    final int finalScore = totalScore;
 
                     Tender tender = tenderRepository.findByExternalId(finalExtId)
                             .orElseGet(() -> {
                                 Tender newTender = new Tender();
                                 newTender.setExternalId(finalExtId);
                                 newTender.setStatus(TenderStatus.NEW);
-                                newTender.setPublicationDate(OffsetDateTime.now());
+                                newTender.setPublicationDate(OffsetDateTime.now(POLAND_ZONE));
                                 return newTender;
                             });
 
                     tender.setTitle(finalTitle);
                     tender.setDescription(finalDesc);
-                    tender.setScore(calculatedScore);
+                    tender.setScore(finalScore);
 
                     Tender savedTender = tenderRepository.save(tender);
                     savedTendersInRun.add(savedTender);
@@ -240,7 +230,7 @@ public class TenderExecutionService {
                     epSaved++;
                 }
 
-                ep.setLastSyncAt(OffsetDateTime.now());
+                ep.setLastSyncAt(OffsetDateTime.now(POLAND_ZONE));
                 endpointRepository.save(ep);
                 logs.add(new SourceLog(
                         ep.getName(),
@@ -261,7 +251,7 @@ public class TenderExecutionService {
         run.setSavedCount(savedCount);
         run.setExcludedCount(excludedCount);
         run.setZeroScoreCount(zeroScoreSkippedCount);
-        run.setCreatedAt(OffsetDateTime.now());
+        run.setCreatedAt(OffsetDateTime.now(POLAND_ZONE));
         run.setTenders(savedTendersInRun);
         FetchRun savedRun = fetchRunRepository.save(run);
 
@@ -275,7 +265,91 @@ public class TenderExecutionService {
         );
     }
 
-    @SuppressWarnings("rawtypes")
+    private List<ParsedKeyword> parseCategoryKeywords(KeywordCategory cat) {
+        List<ParsedKeyword> list = new ArrayList<>();
+        if (cat.getKeywords() == null || cat.getKeywords().isBlank()) {
+            return list;
+        }
+        boolean wholeCatExcluded = Boolean.TRUE.equals(cat.getIsExcluded());
+        int fallbackScore = cat.getScore() != null ? cat.getScore() : 50;
+
+        for (String part : cat.getKeywords().split(",")) {
+            String trimmed = part.trim();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            int colonIdx = trimmed.lastIndexOf(':');
+            if (colonIdx > 0) {
+                String word = trimmed.substring(0, colonIdx).trim().toLowerCase();
+                String suffix = trimmed.substring(colonIdx + 1).trim().toUpperCase();
+                if (word.isEmpty()) {
+                    continue;
+                }
+                if ("EXCLUDED".equals(suffix) || wholeCatExcluded) {
+                    list.add(new ParsedKeyword(word, 0, true));
+                } else {
+                    try {
+                        int w = Math.max(1, Math.min(100, Integer.parseInt(suffix)));
+                        list.add(new ParsedKeyword(word, w, false));
+                    } catch (NumberFormatException e) {
+                        list.add(new ParsedKeyword(word, fallbackScore, false));
+                    }
+                }
+            } else {
+                list.add(new ParsedKeyword(trimmed.toLowerCase(), fallbackScore, wholeCatExcluded));
+            }
+        }
+        return list;
+    }
+
+    private boolean containsAnyExcludedWord(String text, List<KeywordCategory> categories) {
+        for (KeywordCategory cat : categories) {
+            for (ParsedKeyword pk : parseCategoryKeywords(cat)) {
+                if (pk.excluded() && text.contains(pk.word())) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private int calculateCategoryScore(String text, KeywordCategory cat, boolean requireAllWords) {
+        List<ParsedKeyword> positiveWords = new ArrayList<>();
+        for (ParsedKeyword pk : parseCategoryKeywords(cat)) {
+            if (!pk.excluded()) {
+                positiveWords.add(pk);
+            }
+        }
+        if (positiveWords.isEmpty()) {
+            return 0;
+        }
+
+        int sum = 0;
+        int matchedCount = 0;
+        for (ParsedKeyword pk : positiveWords) {
+            if (text.contains(pk.word())) {
+                matchedCount++;
+                sum += pk.weight();
+            }
+        }
+
+        if (requireAllWords && matchedCount < positiveWords.size()) {
+            return 0;
+        }
+        return sum;
+    }
+
+    private String extractScoreBreakdown(Tender t) {
+        if (t.getDescription() != null) {
+            for (String line : t.getDescription().split("\n")) {
+                if (line.startsWith("Punktacja kategorii:")) {
+                    return line.substring("Punktacja kategorii:".length()).trim();
+                }
+            }
+        }
+        return (t.getScore() != null ? t.getScore() : 0) + " pkt";
+    }
+
     public String testScraperConnection(ApiEndpoint ep) throws Exception {
         HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build();
         JsonParser parser = JsonParserFactory.getJsonParser();
@@ -317,26 +391,54 @@ public class TenderExecutionService {
         return result;
     }
 
-    private List<RawItem> callStandardHttpApi(HttpClient client, JsonParser parser, ApiEndpoint ep) throws Exception {
-        HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
-                .uri(URI.create(ep.getUrl()))
-                .timeout(Duration.ofSeconds(15))
-                .header("Accept", "application/json")
-                .header("User-Agent", "TenderSearchEngine/1.0");
-
-        if ("POST".equalsIgnoreCase(ep.getHttpMethod())) {
-            String payload = (ep.getPayload() != null && !ep.getPayload().isBlank()) ? ep.getPayload() : "{}";
-            reqBuilder.header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(payload));
-        } else {
-            reqBuilder.GET();
+    private List<RawItem> callStandardHttpApiWithPagination(
+            HttpClient client,
+            JsonParser parser,
+            ApiEndpoint ep
+    ) throws Exception {
+        int maxPages = 1;
+        if ("GET".equalsIgnoreCase(ep.getHttpMethod()) && ep.getPayload() != null) {
+            String p = ep.getPayload().trim().toLowerCase();
+            if (p.startsWith("pages=")) {
+                try {
+                    maxPages = Math.max(1, Math.min(10, Integer.parseInt(p.substring(6).trim())));
+                } catch (NumberFormatException ignored) {
+                }
+            }
         }
 
-        HttpResponse<String> response = client.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofString());
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-            throw new IllegalArgumentException("Blad HTTP " + response.statusCode());
+        List<RawItem> allItems = new ArrayList<>();
+        for (int page = 1; page <= maxPages; page++) {
+            String targetUrl = ep.getUrl();
+            if (maxPages > 1 && !targetUrl.contains("PageNumber=")) {
+                targetUrl += (targetUrl.contains("?") ? "&" : "?") + "PageNumber=" + page;
+            }
+
+            HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
+                    .uri(URI.create(targetUrl))
+                    .timeout(Duration.ofSeconds(15))
+                    .header("Accept", "application/json")
+                    .header("User-Agent", "TenderSearchEngine/1.0");
+
+            if ("POST".equalsIgnoreCase(ep.getHttpMethod())) {
+                String payload = (ep.getPayload() != null && !ep.getPayload().isBlank()) ? ep.getPayload() : "{}";
+                reqBuilder.header("Content-Type", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString(payload));
+            } else {
+                reqBuilder.GET();
+            }
+
+            HttpResponse<String> response = client.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                throw new IllegalArgumentException("Blad HTTP " + response.statusCode());
+            }
+            List<RawItem> pageItems = extractItems(parser, response.body(), ep.getName());
+            allItems.addAll(pageItems);
+            if (pageItems.isEmpty()) {
+                break;
+            }
         }
-        return extractItems(parser, response.body(), ep.getName());
+        return allItems;
     }
 
     @SuppressWarnings("rawtypes")
@@ -358,9 +460,13 @@ public class TenderExecutionService {
         }
 
         Map map = JsonParserFactory.getJsonParser().parseMap(resp.body());
+        String defaultName = "raport_przetargi_"
+                + LocalDateTime.now(POLAND_ZONE).format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm"))
+                + ".xlsx";
+        String filename = map.get("filename") != null ? String.valueOf(map.get("filename")) : defaultName;
         String base64 = String.valueOf(map.get("base64"));
         int count = map.get("count") instanceof Number n ? n.intValue() : 0;
-        return new ExcelExportResult("raport_przetargi.xlsx", base64, count);
+        return new ExcelExportResult(filename, base64, count);
     }
 
     @SuppressWarnings("rawtypes")
@@ -387,7 +493,8 @@ public class TenderExecutionService {
         boolean sent = Boolean.TRUE.equals(map.get("sent"));
         String message = String.valueOf(map.get("message"));
         String base64 = map.get("base64") != null ? String.valueOf(map.get("base64")) : "";
-        return new EmailDispatchResult(sent, message, base64);
+        String filename = map.get("filename") != null ? String.valueOf(map.get("filename")) : "raport_przetargi.xlsx";
+        return new EmailDispatchResult(sent, message, base64, filename);
     }
 
     private String buildWorkerExcelPayload(
@@ -415,10 +522,12 @@ public class TenderExecutionService {
         for (Tender t : uniqueTenders.values()) {
             if (!first) sb.append(",");
             first = false;
+            String breakdown = extractScoreBreakdown(t);
             sb.append("{")
                     .append("\"externalId\":\"").append(escapeJson(t.getExternalId())).append("\",")
                     .append("\"title\":\"").append(escapeJson(t.getTitle())).append("\",")
                     .append("\"score\":").append(t.getScore() != null ? t.getScore() : 0).append(",")
+                    .append("\"scoreBreakdown\":\"").append(escapeJson(breakdown)).append("\",")
                     .append("\"status\":\"").append(t.getStatus() != null ? t.getStatus().name() : "NEW").append("\",")
                     .append("\"publicationDate\":\"").append(t.getPublicationDate() != null ? t.getPublicationDate().toString() : "").append("\",")
                     .append("\"runInfo\":\"").append(escapeJson(runLabels.getOrDefault(t.getId(), ""))).append("\",")
@@ -450,31 +559,6 @@ public class TenderExecutionService {
         return sb.toString();
     }
 
-    private boolean matchesCategory(String text, KeywordCategory category, boolean requireAllWords) {
-        String[] split = category.getKeywords().split(",");
-        List<String> words = new ArrayList<>();
-        for (String s : split) {
-            String w = s.trim().toLowerCase();
-            if (!w.isEmpty()) {
-                words.add(w);
-            }
-        }
-        if (words.isEmpty()) {
-            return false;
-        }
-        if (requireAllWords) {
-            for (String w : words) {
-                if (!text.contains(w)) return false;
-            }
-            return true;
-        } else {
-            for (String w : words) {
-                if (text.contains(w)) return true;
-            }
-            return false;
-        }
-    }
-
     @SuppressWarnings("rawtypes")
     private List<RawItem> extractItems(JsonParser parser, String body, String sourceName) {
         if (body == null || body.isBlank()) {
@@ -492,7 +576,7 @@ public class TenderExecutionService {
             }
         } else if (trimmed.startsWith("{")) {
             Map root = parser.parseMap(trimmed);
-            for (String key : List.of("items", "content", "results", "data")) {
+            for (String key : List.of("items", "content", "results", "data", "notices")) {
                 Object candidate = root.get(key);
                 if (candidate instanceof List listObj) {
                     for (Object obj : listObj) {
@@ -509,16 +593,16 @@ public class TenderExecutionService {
 
     @SuppressWarnings("rawtypes")
     private RawItem toRawItem(Map map, String sourceName) {
-        String extId = firstNonNullString(map, "objectId", "noticeNumber", "bzpNumber", "id", "externalId");
-        String title = firstNonNullString(map, "orderObject", "title", "name", "subject");
-        String purchaser = firstNonNullString(map, "organizationName", "purchaserName", "buyerName", "client");
+        String extId = firstNonNullString(map, "objectId", "noticeNumber", "bzpNumber", "id", "externalId", "publication-number");
+        String title = firstNonNullString(map, "orderObject", "title", "name", "subject", "BT-21-Procedure");
+        String purchaser = firstNonNullString(map, "organizationName", "purchaserName", "buyerName", "client", "organisation-name-buyer");
         String city = firstNonNullString(map, "organizationCity", "city", "location");
         String province = firstNonNullString(map, "organizationProvince", "province", "region");
         String noticeNo = firstNonNullString(map, "noticeNumber", "bzpNumber", "referenceNumber");
         String noticeType = firstNonNullString(map, "noticeType", "procedureType", "orderType");
         String cpv = firstNonNullString(map, "cpvCode", "cpv", "mainCpv");
         String deadline = firstNonNullString(map, "submittingOffersDate", "deadline", "submissionDeadline");
-        String rawDesc = firstNonNullString(map, "shortDescription", "description", "summary");
+        String rawDesc = firstNonNullString(map, "shortDescription", "description", "summary", "BT-24-Procedure");
 
         StringBuilder details = new StringBuilder();
         details.append("Źródło: ").append(sourceName).append("\n");
@@ -581,6 +665,7 @@ public class TenderExecutionService {
                 .replace("\n", "\\n");
     }
 
+    public record ParsedKeyword(String word, int weight, boolean excluded) {}
     public record RawItem(String externalId, String title, String description) {}
     public record SourceLog(String sourceName, boolean success, int savedCount, String message) {}
     public record ExecutionSummary(
@@ -592,5 +677,5 @@ public class TenderExecutionService {
             List<SourceLog> logs
     ) {}
     public record ExcelExportResult(String filename, String base64, int count) {}
-    public record EmailDispatchResult(boolean sent, String message, String base64) {}
+    public record EmailDispatchResult(boolean sent, String message, String base64, String filename) {}
 }
