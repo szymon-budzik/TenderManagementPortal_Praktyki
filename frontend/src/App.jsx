@@ -1,21 +1,25 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import api from './api';
 import LoginView from './components/LoginView';
 import SearchView from './components/SearchView';
 import AutomationView from './components/AutomationView';
+import ReportsView from './components/ReportsView';
 import TendersView from './components/TendersView';
 import AnalyticsView from './components/AnalyticsView';
 import EndpointsView from './components/EndpointsView';
 import KeywordsView from './components/KeywordsView';
+import SmtpView from './components/SmtpView';
 import UsersView from './components/UsersView';
 import {
   Search,
+  Clock,
   FileSpreadsheet,
   FileText,
   BarChart3,
   Users,
   Globe,
   KeyRound,
+  Mail,
   LogOut,
 } from 'lucide-react';
 import { getEffectiveUserRole, getRolePermissions } from './rolesStore';
@@ -28,15 +32,15 @@ export default function App() {
     return token ? { token, username, role } : null;
   });
 
-  const [verifyingAuth, setVerifyingAuth] = useState(() => Boolean(localStorage.getItem('token')));
+  const [checkingSession, setCheckingSession] = useState(() =>
+    Boolean(localStorage.getItem('token'))
+  );
 
-  // Zapamiętywanie aktywnej zakładki po odświeżeniu strony (F5)
   const [activeTab, setActiveTab] = useState(() => {
     return localStorage.getItem('activeTab') || 'search';
   });
 
   const [, setTick] = useState(0);
-  const lastKnownRunSignature = useRef(null);
 
   const handleSelectTab = (tabId) => {
     setActiveTab(tabId);
@@ -48,95 +52,59 @@ export default function App() {
     localStorage.removeItem('username');
     localStorage.removeItem('role');
     setAuth(null);
-    setVerifyingAuth(false);
   };
-
-  // Weryfikacja tokenu przy starcie aplikacji (np. po uruchomieniu docker compose)
-  useEffect(() => {
-    const verifyTokenOnStart = async () => {
-      const token = localStorage.getItem('token');
-      if (!token) {
-        setVerifyingAuth(false);
-        return;
-      }
-      try {
-        await api.get('/auth/me');
-        setVerifyingAuth(false);
-      } catch {
-        handleLogout();
-      }
-    };
-    verifyTokenOnStart();
-  }, []);
 
   useEffect(() => {
     const handleUpdate = () => setTick((t) => t + 1);
-    const handleAuthInvalid = () => handleLogout();
-
+    const handleForceLogout = () => setAuth(null);
     window.addEventListener('rolesUpdated', handleUpdate);
-    window.addEventListener('authInvalid', handleAuthInvalid);
+    window.addEventListener('authForceLogout', handleForceLogout);
     return () => {
       window.removeEventListener('rolesUpdated', handleUpdate);
-      window.removeEventListener('authInvalid', handleAuthInvalid);
+      window.removeEventListener('authForceLogout', handleForceLogout);
     };
   }, []);
 
-  // Globalny detektor wykonania zadań Crona w tle (odświeża raporty, przetargi i statystyki)
   useEffect(() => {
-    if (!auth || verifyingAuth) return;
+    const token = localStorage.getItem('token');
+    if (!token) {
+      setCheckingSession(false);
+      return;
+    }
+    api
+      .get('/search/sources')
+      .then(() => setCheckingSession(false))
+      .catch(() => {
+        handleLogout();
+        setCheckingSession(false);
+      });
+  }, []);
 
-    const checkRuns = async () => {
-      try {
-        const res = await api.get('/automation/runs');
-        const runs = res.data || [];
-        const newestId = runs.length > 0 ? runs[0].id : 0;
-        const signature = `${runs.length}:${newestId}`;
-
-        if (
-          lastKnownRunSignature.current !== null &&
-          lastKnownRunSignature.current !== signature
-        ) {
-          window.dispatchEvent(new Event('dataUpdatedByCron'));
-        }
-        lastKnownRunSignature.current = signature;
-      } catch {
-        // Ciche sprawdzenie w tle
-      }
-    };
-
-    checkRuns();
-    const interval = setInterval(checkRuns, 8000);
-    return () => clearInterval(interval);
-  }, [auth, verifyingAuth]);
-
-  if (verifyingAuth) {
+  if (checkingSession) {
     return null;
   }
 
   if (!auth) {
-    return (
-      <LoginView
-        onLoginSuccess={(data) => {
-          setAuth(data);
-          setVerifyingAuth(false);
-        }}
-      />
-    );
+    return <LoginView onLoginSuccess={(data) => setAuth(data)} />;
   }
 
   const effectiveRole = getEffectiveUserRole(auth.username, auth.role);
   const permissions = getRolePermissions(effectiveRole);
 
+  // Zakładki dostępne dla każdego (Automatyzacja, a bezpośrednio pod nią Raporty)
   const alwaysAvailableItems = [
     { id: 'search', label: 'Wyszukiwarka', icon: Search },
-    { id: 'automation', label: 'Automatyzacja i Excel', icon: FileSpreadsheet },
+    { id: 'automation', label: 'Automatyzacja', icon: Clock },
+    { id: 'reports', label: 'Raporty', icon: FileSpreadsheet },
     { id: 'tenders', label: 'Przetargi', icon: FileText },
     { id: 'analytics', label: 'Statystyki', icon: BarChart3 },
   ];
 
+  // Zakładki zależne od uprawnień roli (SMTP bezpośrednio pod Keywordsami)
   const rolePanelItems = [
     { id: 'endpoints', label: 'Endpointy', icon: Globe, perm: 'ENDPOINTS' },
     { id: 'keywords', label: 'Keywordsy', icon: KeyRound, perm: 'KEYWORDS' },
+    { id: 'smtp', label: 'SMTP', icon: Mail, perm: 'SMTP' },
     { id: 'users', label: 'Użytkownicy', icon: Users, perm: 'USERS' },
   ].filter((item) => permissions.includes(item.perm));
 
@@ -215,10 +183,12 @@ export default function App() {
       <main className="flex-1 p-8 overflow-y-auto">
         {activeTab === 'search' && <SearchView />}
         {activeTab === 'automation' && <AutomationView />}
+        {activeTab === 'reports' && <ReportsView />}
         {activeTab === 'tenders' && <TendersView />}
         {activeTab === 'analytics' && <AnalyticsView />}
         {activeTab === 'endpoints' && permissions.includes('ENDPOINTS') && <EndpointsView />}
         {activeTab === 'keywords' && permissions.includes('KEYWORDS') && <KeywordsView />}
+        {activeTab === 'smtp' && permissions.includes('SMTP') && <SmtpView />}
         {activeTab === 'users' && permissions.includes('USERS') && <UsersView />}
       </main>
     </div>

@@ -1,13 +1,14 @@
 export const CONFIGURABLE_PERMISSIONS = [
   { id: 'ENDPOINTS', label: 'Endpointy' },
   { id: 'KEYWORDS', label: 'Keywordsy' },
+  { id: 'SMTP', label: 'SMTP' },
   { id: 'USERS', label: 'Użytkownicy' },
 ];
 
 const DEFAULT_ROLES = [
   {
     name: 'ROLE_ADMIN',
-    permissions: ['ENDPOINTS', 'KEYWORDS', 'USERS'],
+    permissions: ['ENDPOINTS', 'KEYWORDS', 'SMTP', 'USERS'],
     isSystem: true,
   },
   {
@@ -17,7 +18,7 @@ const DEFAULT_ROLES = [
   },
 ];
 
-const ROLES_KEY = 'app_custom_roles_v2';
+const ROLES_KEY = 'app_custom_roles_v3';
 const USER_ROLES_MAP_KEY = 'app_user_roles_map_v2';
 
 export function getRoles() {

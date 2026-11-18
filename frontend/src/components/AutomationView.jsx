@@ -2,19 +2,15 @@ import { useState, useEffect, useMemo } from 'react';
 import api from '../api';
 import ConfirmModal from './ConfirmModal';
 import {
-  FileSpreadsheet,
   Mail,
   Play,
   Save,
   Trash2,
-  Settings,
-  Download,
   Plus,
   Pencil,
   Layers,
   Globe,
   KeyRound,
-  X,
   ArrowUpDown,
   Clock,
 } from 'lucide-react';
@@ -47,36 +43,18 @@ const DAYS_OF_WEEK = [
 
 export default function AutomationView() {
   const [profiles, setProfiles] = useState([]);
-  const [runs, setRuns] = useState([]);
   const [endpoints, setEndpoints] = useState([]);
   const [categories, setCategories] = useState([]);
   const [smtpAccounts, setSmtpAccounts] = useState([]);
-
-  const [selectedRunIds, setSelectedRunIds] = useState([]);
-  const [manualEmails, setManualEmails] = useState('');
-  const [manualSmtpId, setManualSmtpId] = useState('');
-  const [showSmtpManager, setShowSmtpManager] = useState(false);
   const [loadingAction, setLoadingAction] = useState(false);
 
-  // Modal potwierdzenia usunięcia
   const [confirmDialog, setConfirmDialog] = useState(null);
 
-  // Formularz konta SMTP
-  const [editingSmtpId, setEditingSmtpId] = useState(null);
-  const [smtpForm, setSmtpForm] = useState({
-    name: '',
-    smtpHost: '',
-    smtpPort: 587,
-    smtpUsername: '',
-    smtpPassword: '',
-  });
-
-  // Formularz tworzenia / edycji profilu (4 tryby Crona + wybór konta SMTP)
   const [editingProfileId, setEditingProfileId] = useState(null);
   const [profileForm, setProfileForm] = useState({
     name: '',
     enabled: true,
-    scheduleType: 'DAILY', // 'DAILY' | 'MULTI_TIME' | 'INTERVAL' | 'WEEKLY'
+    scheduleType: 'DAILY',
     cronTime: '08:00',
     intervalMinutes: 60,
     daysOfWeek: ['1', '2', '3', '4', '5'],
@@ -87,32 +65,23 @@ export default function AutomationView() {
     smtpAccountId: '',
   });
 
-  // Sortowanie tabel
   const [profileSort, setProfileSort] = useState({ key: 'id', dir: 'asc' });
-  const [runSort, setRunSort] = useState({ key: 'id', dir: 'desc' });
 
   const fetchAll = async () => {
     try {
-      const [profRes, runsRes, smtpRes, epRes, catRes] = await Promise.all([
+      const [profRes, smtpRes, epRes, catRes] = await Promise.all([
         api.get('/automation/profiles').catch(() => ({ data: [] })),
-        api.get('/automation/runs').catch(() => ({ data: [] })),
         api.get('/automation/smtp-accounts').catch(() => ({ data: [] })),
         api.get('/search/sources').catch(() => ({ data: [] })),
         api.get('/keywords').catch(() => ({ data: [] })),
       ]);
 
-      const smtpList = smtpRes.data || [];
       setProfiles(profRes.data || []);
-      setRuns(runsRes.data || []);
-      setSmtpAccounts(smtpList);
+      setSmtpAccounts(smtpRes.data || []);
       setEndpoints(epRes.data || []);
       setCategories(catRes.data || []);
-
-      if (smtpList.length > 0 && !manualSmtpId) {
-        setManualSmtpId(String(smtpList[0].id));
-      }
     } catch (err) {
-      console.error('Błąd pobierania danych automatyzacji:', err);
+      console.error('Błąd pobierania danych profili automatyzacji:', err);
     }
   };
 
@@ -120,89 +89,16 @@ export default function AutomationView() {
     fetchAll();
     const interval = setInterval(async () => {
       try {
-        const [profRes, runsRes] = await Promise.all([
-          api.get('/automation/profiles'),
-          api.get('/automation/runs'),
-        ]);
+        const profRes = await api.get('/automation/profiles');
         setProfiles(profRes.data || []);
-        setRuns(runsRes.data || []);
       } catch {
-        // Ciche odświeżanie w tle co 10s
+        // Ciche odświeżanie statusu profili w tle co 10s
       }
     }, 10000);
 
     return () => clearInterval(interval);
   }, []);
 
-  // --- ZARZĄDZANIE KONTAMI SMTP ---
-  const resetSmtpForm = () => {
-    setEditingSmtpId(null);
-    setSmtpForm({
-      name: '',
-      smtpHost: '',
-      smtpPort: 587,
-      smtpUsername: '',
-      smtpPassword: '',
-    });
-  };
-
-  const handleEditSmtp = (acc) => {
-    setEditingSmtpId(acc.id);
-    setSmtpForm({
-      name: acc.name || '',
-      smtpHost: acc.smtpHost || acc.host || '',
-      smtpPort: acc.smtpPort ?? acc.port ?? 587,
-      smtpUsername: acc.smtpUsername || acc.username || '',
-      smtpPassword: acc.smtpPassword || acc.password || '',
-    });
-  };
-
-  const handleSaveSmtpAccount = async (e) => {
-    e.preventDefault();
-    if (!smtpForm.name.trim() || !smtpForm.smtpHost.trim()) return;
-
-    const payload = {
-      name: smtpForm.name.trim(),
-      smtpHost: smtpForm.smtpHost.trim(),
-      host: smtpForm.smtpHost.trim(),
-      smtpPort: Number(smtpForm.smtpPort) || 587,
-      port: Number(smtpForm.smtpPort) || 587,
-      smtpUsername: smtpForm.smtpUsername.trim(),
-      username: smtpForm.smtpUsername.trim(),
-      smtpPassword: smtpForm.smtpPassword,
-      password: smtpForm.smtpPassword,
-    };
-
-    try {
-      if (editingSmtpId) {
-        await api.put(`/automation/smtp-accounts/${editingSmtpId}`, payload);
-      } else {
-        await api.post('/automation/smtp-accounts', payload);
-      }
-      resetSmtpForm();
-      fetchAll();
-    } catch (err) {
-      console.error('Błąd zapisu konta SMTP:', err);
-    }
-  };
-
-  const confirmDeleteSmtp = (acc) => {
-    setConfirmDialog({
-      title: 'Usuń konto SMTP',
-      message: `Czy na pewno chcesz usunąć konfigurację SMTP "${acc.name}"?`,
-      onConfirm: async () => {
-        try {
-          await api.delete(`/automation/smtp-accounts/${acc.id}`);
-          if (editingSmtpId === acc.id) resetSmtpForm();
-          fetchAll();
-        } finally {
-          setConfirmDialog(null);
-        }
-      },
-    });
-  };
-
-  // --- KREATOR PROFILI AUTOMATYZACJI ---
   const resetProfileForm = () => {
     setEditingProfileId(null);
     setProfileForm({
@@ -273,12 +169,6 @@ export default function AutomationView() {
     const tags = parseEmailTags(profileForm.recipientEmails);
     const next = tags.filter((_, idx) => idx !== indexToRemove).join(', ');
     setProfileForm({ ...profileForm, recipientEmails: next });
-  };
-
-  const removeManualEmailTag = (indexToRemove) => {
-    const tags = parseEmailTags(manualEmails);
-    const next = tags.filter((_, idx) => idx !== indexToRemove).join(', ');
-    setManualEmails(next);
   };
 
   const handleSaveProfile = async (e) => {
@@ -358,83 +248,6 @@ export default function AutomationView() {
     });
   };
 
-  // --- HISTORIA POBRAŃ, EXCEL I EMAIL ---
-  const toggleSelectRun = (id) => {
-    setSelectedRunIds((prev) =>
-      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
-    );
-  };
-
-  const downloadBase64Excel = (base64Data, filename = 'raport_przetargi.xlsx') => {
-    if (!base64Data) return;
-    const byteCharacters = atob(base64Data);
-    const byteNumbers = new Array(byteCharacters.length);
-    for (let i = 0; i < byteCharacters.length; i++) {
-      byteNumbers[i] = byteCharacters.charCodeAt(i);
-    }
-    const byteArray = new Uint8Array(byteNumbers);
-    const blob = new Blob([byteArray], {
-      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
-  const handleDownloadSelectedExcel = async () => {
-    if (selectedRunIds.length === 0) return;
-    setLoadingAction(true);
-    try {
-      const res = await api.post('/automation/runs/export', { runIds: selectedRunIds });
-      downloadBase64Excel(res.data.base64, res.data.filename);
-    } catch (err) {
-      console.error('Błąd pobierania Excela:', err);
-    } finally {
-      setLoadingAction(false);
-    }
-  };
-
-  const handleSendSelectedByEmail = async () => {
-    if (selectedRunIds.length === 0 || !manualEmails.trim()) return;
-    setLoadingAction(true);
-    try {
-      const res = await api.post('/automation/runs/email', {
-        runIds: selectedRunIds,
-        emails: manualEmails,
-        smtpAccountId: manualSmtpId ? Number(manualSmtpId) : null,
-      });
-      if (!res.data.sent && res.data.base64) {
-        downloadBase64Excel(res.data.base64, res.data.filename || 'raport_przetargi.xlsx');
-      }
-    } catch (err) {
-      console.error('Błąd wysyłki e-mail:', err);
-    } finally {
-      setLoadingAction(false);
-    }
-  };
-
-  const confirmDeleteRun = (run) => {
-    setConfirmDialog({
-      title: 'Usuń wpis z historii pobrań',
-      message: `Czy na pewno chcesz usunąć pobranie #${run.id} (${run.sourceType})?`,
-      onConfirm: async () => {
-        try {
-          await api.delete(`/automation/runs/${run.id}`);
-          setSelectedRunIds((prev) => prev.filter((item) => item !== run.id));
-          fetchAll();
-        } finally {
-          setConfirmDialog(null);
-        }
-      },
-    });
-  };
-
-  // Formatowanie opisu harmonogramu w tabeli
   const formatScheduleDescription = (p) => {
     const type = p.scheduleType || 'DAILY';
     if (type === 'INTERVAL') {
@@ -453,9 +266,8 @@ export default function AutomationView() {
     return `Codziennie o ${p.cronTime}`;
   };
 
-  // --- SORTOWANIE TABEL ---
-  const toggleSort = (setter, key) => {
-    setter((prev) => ({
+  const toggleSort = (key) => {
+    setProfileSort((prev) => ({
       key,
       dir: prev.key === key && prev.dir === 'asc' ? 'desc' : 'asc',
     }));
@@ -479,26 +291,10 @@ export default function AutomationView() {
     return copy;
   }, [profiles, profileSort]);
 
-  const sortedRuns = useMemo(() => {
-    const copy = [...runs];
-    copy.sort((a, b) => {
-      const { key, dir } = runSort;
-      const mult = dir === 'asc' ? 1 : -1;
-      const valA = a[key] ?? '';
-      const valB = b[key] ?? '';
-      if (typeof valA === 'number' && typeof valB === 'number') {
-        return (valA - valB) * mult;
-      }
-      return String(valA).localeCompare(String(valB), 'pl') * mult;
-    });
-    return copy;
-  }, [runs, runSort]);
-
   const profileEmailTags = parseEmailTags(profileForm.recipientEmails);
-  const manualEmailTags = parseEmailTags(manualEmails);
 
   return (
-    <div className="space-y-8 text-black">
+    <div className="space-y-6 text-black">
       {confirmDialog && (
         <ConfirmModal
           isOpen={true}
@@ -512,184 +308,23 @@ export default function AutomationView() {
         />
       )}
 
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h2 className="text-2xl font-extrabold text-black">
-            Profile Automatyzacji (Cron) i Eksport Excel
-          </h2>
-          <p className="text-sm font-medium text-black mt-1">
-            Konfiguruj wiele kont SMTP, twórz profile z zaawansowanym harmonogramem Crona i wysyłaj raporty Excel.
-          </p>
-        </div>
-
-        <button
-          type="button"
-          onClick={() => setShowSmtpManager(!showSmtpManager)}
-          className="flex items-center gap-1.5 px-4 py-2.5 bg-white border-2 border-blue-600 hover:bg-blue-50 rounded-xl text-xs font-extrabold cursor-pointer"
-        >
-          <Settings size={16} />
-          Konta pocztowe SMTP ({smtpAccounts.length})
-        </button>
+      <div>
+        <h2 className="text-2xl font-extrabold text-black">
+          Automatyzacja — Profile Harmonogramu (Cron)
+        </h2>
+        <p className="text-sm font-medium text-black mt-1">
+          Twórz dedykowane profile (np. dla firmy IT, budowlanej) z własnymi endpointami, kategoriami, harmonogramem Crona i przypisanym kontem SMTP.
+        </p>
       </div>
 
-      {/* PANEL ZARZĄDZANIA WIELOMA KONTAMI SMTP */}
-      {showSmtpManager && (
-        <div className="bg-white p-6 rounded-xl border-2 border-blue-600 shadow-xs space-y-5">
-          <div className="flex items-center justify-between border-b border-blue-100 pb-3">
-            <div>
-              <h3 className="font-extrabold text-base text-black">
-                Zarządzanie Kontami Serwerów Pocztowych (SMTP)
-              </h3>
-              <p className="text-xs font-semibold text-black">
-                Dodaj jedno lub kilka kont SMTP, aby przypisywać je do wybranych profili Crona.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setShowSmtpManager(false)}
-              className="p-1.5 rounded-lg border border-blue-300 hover:bg-blue-50 cursor-pointer"
-            >
-              <X size={16} />
-            </button>
-          </div>
-
-          <form
-            onSubmit={handleSaveSmtpAccount}
-            className="grid grid-cols-1 md:grid-cols-6 gap-3 items-end bg-slate-50 p-4 rounded-xl border border-blue-200"
-          >
-            <div>
-              <label className="block text-xs font-bold uppercase mb-1">Nazwa konta</label>
-              <input
-                type="text"
-                required
-                value={smtpForm.name}
-                onChange={(e) => setSmtpForm({ ...smtpForm, name: e.target.value })}
-                placeholder="np. Gmail IT"
-                className="w-full px-3 py-2 border border-blue-300 rounded-lg bg-white text-sm"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-bold uppercase mb-1">Host SMTP</label>
-              <input
-                type="text"
-                required
-                value={smtpForm.smtpHost}
-                onChange={(e) => setSmtpForm({ ...smtpForm, smtpHost: e.target.value })}
-                placeholder="smtp.gmail.com"
-                className="w-full px-3 py-2 border border-blue-300 rounded-lg bg-white text-sm"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-bold uppercase mb-1">Port</label>
-              <input
-                type="number"
-                required
-                value={smtpForm.smtpPort}
-                onChange={(e) => setSmtpForm({ ...smtpForm, smtpPort: Number(e.target.value) })}
-                className="w-full px-3 py-2 border border-blue-300 rounded-lg bg-white text-sm"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-bold uppercase mb-1">Login / E-mail</label>
-              <input
-                type="text"
-                required
-                value={smtpForm.smtpUsername}
-                onChange={(e) => setSmtpForm({ ...smtpForm, smtpUsername: e.target.value })}
-                placeholder="twoj@gmail.com"
-                className="w-full px-3 py-2 border border-blue-300 rounded-lg bg-white text-sm"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-bold uppercase mb-1">Hasło aplikacji</label>
-              <input
-                type="password"
-                required
-                value={smtpForm.smtpPassword}
-                onChange={(e) => setSmtpForm({ ...smtpForm, smtpPassword: e.target.value })}
-                placeholder="16-znakowy kod"
-                className="w-full px-3 py-2 border border-blue-300 rounded-lg bg-white text-sm"
-              />
-            </div>
-            <div className="flex gap-2">
-              <button
-                type="submit"
-                className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 bg-blue-600 hover:bg-blue-700 text-white font-extrabold rounded-lg text-xs cursor-pointer"
-              >
-                <Save size={14} /> {editingSmtpId ? 'Zapisz' : 'Dodaj SMTP'}
-              </button>
-              {editingSmtpId && (
-                <button
-                  type="button"
-                  onClick={resetSmtpForm}
-                  className="px-2.5 py-2 bg-white border border-blue-300 rounded-lg text-xs font-bold cursor-pointer"
-                >
-                  Anuluj
-                </button>
-              )}
-            </div>
-          </form>
-
-          <div className="rounded-xl border border-blue-200 overflow-hidden">
-            <table className="w-full text-left border-collapse text-xs">
-              <thead>
-                <tr className="bg-blue-600 text-white">
-                  <th className="p-3 font-bold">Nazwa konta</th>
-                  <th className="p-3 font-bold">Host i Port</th>
-                  <th className="p-3 font-bold">Login nadawcy</th>
-                  <th className="p-3 font-bold text-right">Akcje</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-blue-100">
-                {smtpAccounts.length === 0 ? (
-                  <tr>
-                    <td colSpan="4" className="p-4 text-center font-medium">
-                      Brak zapisanych kont SMTP. Dodaj pierwsze konto powyżej.
-                    </td>
-                  </tr>
-                ) : (
-                  smtpAccounts.map((acc) => (
-                    <tr key={acc.id} className="hover:bg-blue-50/40">
-                      <td className="p-3 font-extrabold">{acc.name}</td>
-                      <td className="p-3 font-mono">
-                        {acc.smtpHost || acc.host}:{acc.smtpPort ?? acc.port ?? 587}
-                      </td>
-                      <td className="p-3 font-mono">{acc.smtpUsername || acc.username}</td>
-                      <td className="p-3 text-right">
-                        <div className="flex justify-end gap-2">
-                          <button
-                            type="button"
-                            onClick={() => handleEditSmtp(acc)}
-                            className="px-2.5 py-1 bg-white border border-blue-400 rounded font-bold cursor-pointer"
-                          >
-                            Edytuj
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => confirmDeleteSmtp(acc)}
-                            className="px-2.5 py-1 bg-white border border-red-400 rounded font-bold cursor-pointer"
-                          >
-                            Usuń
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* SEKCJA 1: KREATOR I OBSŁUGA PROFILI AUTOMATYZACJI */}
+      {/* KREATOR I OBSŁUGA PROFILI AUTOMATYZACJI */}
       <div className="bg-white p-6 rounded-xl border-2 border-blue-600 shadow-xs space-y-6">
         <div className="flex items-center justify-between border-b border-blue-100 pb-4">
           <div className="flex items-center gap-2.5">
             <Layers size={22} className="text-blue-600" />
             <div>
               <h3 className="text-lg font-extrabold text-black">
-                1. Kreator i Obsługa Profili Automatyzacji (Cron)
+                Kreator i Obsługa Profili Automatyzacji (Cron)
               </h3>
               <p className="text-xs font-semibold text-black">
                 Przypisz do profilu endpointy, kategorie, tryb aktywacji Crona, odbiorców e-mail oraz konto SMTP.
@@ -776,7 +411,6 @@ export default function AutomationView() {
             </div>
           </div>
 
-          {/* Szczegóły konfiguracji wybranego trybu Crona + E-maile ze znacznikami */}
           <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-start bg-white p-4 rounded-xl border border-blue-200">
             <div className="md:col-span-5 space-y-2">
               <div className="flex items-center gap-1.5 text-xs font-extrabold uppercase text-blue-700">
@@ -878,7 +512,6 @@ export default function AutomationView() {
               )}
             </div>
 
-            {/* E-maile profilu z szarymi znacznikami (jak keywordsy) */}
             <div className="md:col-span-7">
               <label className="block text-xs font-bold uppercase mb-1">
                 Odbiorcy e-mail dla profilu (rozdzielaj przecinkiem)
@@ -915,7 +548,6 @@ export default function AutomationView() {
             </div>
           </div>
 
-          {/* Wybór Endpointów i Kategorii dla profilu */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="bg-white p-4 rounded-xl border border-blue-200 space-y-2.5">
               <div className="flex items-center justify-between">
@@ -1062,13 +694,12 @@ export default function AutomationView() {
           </div>
         </form>
 
-        {/* Tabela utworzonych profili z sortowaniem po nagłówkach */}
         <div className="rounded-xl border border-blue-200 overflow-hidden">
           <table className="w-full text-left border-collapse text-sm">
             <thead>
               <tr className="bg-blue-600 text-white select-none">
                 <th
-                  onClick={() => toggleSort(setProfileSort, 'name')}
+                  onClick={() => toggleSort('name')}
                   className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
                 >
                   <div className="inline-flex items-center gap-1">
@@ -1076,7 +707,7 @@ export default function AutomationView() {
                   </div>
                 </th>
                 <th
-                  onClick={() => toggleSort(setProfileSort, 'cronTime')}
+                  onClick={() => toggleSort('cronTime')}
                   className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
                 >
                   <div className="inline-flex items-center gap-1">
@@ -1085,7 +716,7 @@ export default function AutomationView() {
                 </th>
                 <th className="p-3.5 font-bold">Przypisane Endpointy i Kategorie</th>
                 <th
-                  onClick={() => toggleSort(setProfileSort, 'recipientEmails')}
+                  onClick={() => toggleSort('recipientEmails')}
                   className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
                 >
                   <div className="inline-flex items-center gap-1">
@@ -1093,7 +724,7 @@ export default function AutomationView() {
                   </div>
                 </th>
                 <th
-                  onClick={() => toggleSort(setProfileSort, 'enabled')}
+                  onClick={() => toggleSort('enabled')}
                   className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
                 >
                   <div className="inline-flex items-center gap-1">
@@ -1216,254 +847,6 @@ export default function AutomationView() {
                             <Trash2 size={13} /> Usuń
                           </button>
                         </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* SEKCJA 2: HISTORIA POBRAŃ + WYSYŁKA NA EMAIL / POBIERANIE EXCELA */}
-      <div className="bg-white p-6 rounded-xl border border-blue-200 shadow-xs space-y-5">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-blue-100 pb-4">
-          <div className="flex items-center gap-2">
-            <FileSpreadsheet size={22} className="text-blue-600" />
-            <div>
-              <h3 className="text-lg font-extrabold text-black">
-                2. Lista wszystkich pobrań (Zaznacz jedno lub kilka)
-              </h3>
-              <p className="text-xs font-medium text-black">
-                Kliknij w wybrany nagłówek kolumny, aby posortować tabelę.Lista odświeża się automatycznie po uruchomieniu Crona.
-              </p>
-            </div>
-          </div>
-
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => setSelectedRunIds(runs.map((r) => r.id))}
-              className="px-3 py-1.5 text-xs font-bold bg-blue-50 border border-blue-300 rounded-lg hover:bg-blue-100 cursor-pointer"
-            >
-              Zaznacz wszystkie
-            </button>
-            <button
-              type="button"
-              onClick={() => setSelectedRunIds([])}
-              className="px-3 py-1.5 text-xs font-bold bg-white border border-blue-300 rounded-lg hover:bg-blue-50 cursor-pointer"
-            >
-              Odznacz wszystkie
-            </button>
-          </div>
-        </div>
-
-        <div className="bg-blue-50/70 p-4 rounded-xl border border-blue-300 space-y-3">
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
-            <div className="md:col-span-5">
-              <label className="block text-xs font-extrabold uppercase mb-1">
-                Adresy e-mail odbiorców (rozdzielone przecinkiem) — Zaznaczono: {selectedRunIds.length}
-              </label>
-              <input
-                type="text"
-                value={manualEmails}
-                onChange={(e) => setManualEmails(e.target.value)}
-                placeholder="np. jan.kowalski@firma.pl, dzial.ofert@firma.pl"
-                className="w-full px-3.5 py-2 border border-blue-400 rounded-lg bg-white text-black text-sm font-mono"
-              />
-            </div>
-
-            <div className="md:col-span-3">
-              <label className="block text-xs font-extrabold uppercase mb-1">
-                Wyślij przez konto SMTP
-              </label>
-              <select
-                value={manualSmtpId}
-                onChange={(e) => setManualSmtpId(e.target.value)}
-                className="w-full px-3 py-2 border border-blue-400 rounded-lg bg-white text-black text-xs font-bold"
-              >
-                <option value="">Domyślne konto SMTP</option>
-                {smtpAccounts.map((acc) => (
-                  <option key={acc.id} value={acc.id}>
-                    {acc.name} ({acc.smtpUsername || acc.username})
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="md:col-span-2">
-              <button
-                type="button"
-                disabled={loadingAction}
-                onClick={handleSendSelectedByEmail}
-                className="w-full flex items-center justify-center gap-1.5 py-2.5 px-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-extrabold rounded-lg text-xs cursor-pointer"
-              >
-                <Mail size={15} />
-                Wyślij Excel
-              </button>
-            </div>
-
-            <div className="md:col-span-2">
-              <button
-                type="button"
-                disabled={loadingAction}
-                onClick={handleDownloadSelectedExcel}
-                className="w-full flex items-center justify-center gap-1.5 py-2.5 px-3 bg-green-400 hover:bg-green-500 border-2 border-green-800 text-black font-extrabold rounded-lg text-xs cursor-pointer"
-              >
-                <Download size={15} />
-                Pobierz .xlsx
-              </button>
-            </div>
-          </div>
-
-          {manualEmailTags.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 pt-1">
-              {manualEmailTags.map((email, idx) => (
-                <span
-                  key={idx}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-200 border border-slate-400 rounded-md text-xs font-bold text-black"
-                >
-                  <Mail size={12} className="text-slate-700" />
-                  {email}
-                  <button
-                    type="button"
-                    onClick={() => removeManualEmailTag(idx)}
-                    className="hover:text-red-700 font-extrabold cursor-pointer"
-                  >
-                    ×
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div className="rounded-xl border border-blue-200 overflow-hidden">
-          <table className="w-full text-left border-collapse text-sm">
-            <thead>
-              <tr className="bg-blue-600 text-white select-none">
-                <th className="p-3.5 font-bold w-12 text-center">Wybór</th>
-                <th
-                  onClick={() => toggleSort(setRunSort, 'id')}
-                  className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
-                >
-                  <div className="inline-flex items-center gap-1">
-                    ID Pob. <ArrowUpDown size={14} />
-                  </div>
-                </th>
-                <th
-                  onClick={() => toggleSort(setRunSort, 'createdAt')}
-                  className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
-                >
-                  <div className="inline-flex items-center gap-1">
-                    Data i godzina <ArrowUpDown size={14} />
-                  </div>
-                </th>
-                <th
-                  onClick={() => toggleSort(setRunSort, 'sourceType')}
-                  className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
-                >
-                  <div className="inline-flex items-center gap-1">
-                    Tryb <ArrowUpDown size={14} />
-                  </div>
-                </th>
-                <th
-                  onClick={() => toggleSort(setRunSort, 'sourcesSummary')}
-                  className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
-                >
-                  <div className="inline-flex items-center gap-1">
-                    Źródła danych <ArrowUpDown size={14} />
-                  </div>
-                </th>
-                <th
-                  onClick={() => toggleSort(setRunSort, 'totalFetched')}
-                  className="p-3.5 font-bold text-center cursor-pointer hover:bg-blue-700"
-                >
-                  <div className="inline-flex items-center gap-1">
-                    Pobrano <ArrowUpDown size={14} />
-                  </div>
-                </th>
-                <th
-                  onClick={() => toggleSort(setRunSort, 'savedCount')}
-                  className="p-3.5 font-bold text-center cursor-pointer hover:bg-blue-700"
-                >
-                  <div className="inline-flex items-center gap-1">
-                    Zapisano (&gt;0 pkt) <ArrowUpDown size={14} />
-                  </div>
-                </th>
-                <th
-                  onClick={() => toggleSort(setRunSort, 'excludedCount')}
-                  className="p-3.5 font-bold text-center cursor-pointer hover:bg-blue-700"
-                >
-                  <div className="inline-flex items-center gap-1">
-                    Wykluczono <ArrowUpDown size={14} />
-                  </div>
-                </th>
-                <th className="p-3.5 font-bold text-right">Akcje</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-blue-100">
-              {sortedRuns.length === 0 ? (
-                <tr>
-                  <td colSpan="9" className="p-6 text-center font-medium text-black">
-                    Brak zarejestrowanych pobrań.
-                  </td>
-                </tr>
-              ) : (
-                sortedRuns.map((r) => {
-                  const checked = selectedRunIds.includes(r.id);
-                  const isCron = r.sourceType && r.sourceType.toUpperCase().startsWith('CRON');
-                  const modeLabel =
-                    r.sourceType === 'MANUAL' ? 'RĘCZNE' : r.sourceType || 'RĘCZNE';
-
-                  return (
-                    <tr
-                      key={r.id}
-                      onClick={() => toggleSelectRun(r.id)}
-                      className={`transition cursor-pointer ${
-                        checked ? 'bg-blue-100/70 font-semibold' : 'hover:bg-blue-50/50'
-                      }`}
-                    >
-                      <td className="p-3.5 text-center" onClick={(e) => e.stopPropagation()}>
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => toggleSelectRun(r.id)}
-                          className="w-5 h-5 accent-blue-600 cursor-pointer"
-                        />
-                      </td>
-                      <td className="p-3.5 font-mono font-bold">#{r.id}</td>
-                      <td className="p-3.5 whitespace-nowrap">
-                        {r.createdAt ? new Date(r.createdAt).toLocaleString('pl-PL') : '—'}
-                      </td>
-                      <td className="p-3.5">
-                        <span
-                          className={`px-2.5 py-1 rounded text-xs font-extrabold border ${
-                            isCron
-                              ? 'bg-amber-200 border-amber-700 text-black'
-                              : 'bg-blue-100 border-blue-600 text-black'
-                          }`}
-                        >
-                          {modeLabel}
-                        </span>
-                      </td>
-                      <td className="p-3.5 text-xs">{r.sourcesSummary || '—'}</td>
-                      <td className="p-3.5 text-center font-bold">{r.totalFetched}</td>
-                      <td className="p-3.5 text-center">
-                        <span className="px-2.5 py-0.5 rounded bg-green-300 border border-green-800 font-extrabold text-xs">
-                          {r.savedCount}
-                        </span>
-                      </td>
-                      <td className="p-3.5 text-center font-bold">{r.excludedCount}</td>
-                      <td className="p-3.5 text-right" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          type="button"
-                          onClick={() => confirmDeleteRun(r)}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 bg-white border border-red-400 hover:bg-red-100 text-black rounded-lg font-bold text-xs cursor-pointer"
-                        >
-                          <Trash2 size={14} /> Usuń
-                        </button>
                       </td>
                     </tr>
                   );
