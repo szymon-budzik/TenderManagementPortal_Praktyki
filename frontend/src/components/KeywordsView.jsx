@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import api from '../api';
-import { Trash2, Plus, Pencil, Check, X, KeyRound, AlertCircle } from 'lucide-react';
+import ConfirmModal from './ConfirmModal';
+import { Trash2, Plus, Pencil, Check, X, KeyRound, ArrowUpDown } from 'lucide-react';
 
-// Pomocnicza funkcja parsująca "oprogramowanie:50, java:60, python:EXCLUDED"
 export function parseKeywordsString(raw) {
   if (!raw) return [];
   return raw
@@ -36,20 +36,17 @@ export function serializeKeywordsList(list) {
 
 export default function KeywordsView() {
   const [categories, setCategories] = useState([]);
-  const [errorMsg, setErrorMsg] = useState('');
+  const [sortConfig, setSortConfig] = useState({ key: 'name', dir: 'asc' });
+  const [confirmDialog, setConfirmDialog] = useState(null);
 
-  // Formularz tworzenia nowej kategorii (tylko nazwa + słowa po przecinku)
   const [name, setName] = useState('');
   const [keywordsInput, setKeywordsInput] = useState('');
 
-  // Edycja nazwy kategorii lub dodanie nowego słowa
   const [editingCatId, setEditingCatId] = useState(null);
   const [editCatName, setEditCatName] = useState('');
   const [addingWordCatId, setAddingWordCatId] = useState(null);
   const [newWordsText, setNewWordsText] = useState('');
 
-  // Aktywnie kliknięte słowo kluczowe do ustawienia wagi 1-100 lub wykluczenia
-  // { catId, wordIndex, word, score, isExcluded }
   const [selectedKeyword, setSelectedKeyword] = useState(null);
 
   const fetchCategories = async () => {
@@ -65,26 +62,26 @@ export default function KeywordsView() {
     fetchCategories();
   }, []);
 
-  const validateRawWords = (raw) => {
-    const trimmed = raw.trim();
-    if (!trimmed) {
-      return 'Wpisz przynajmniej jedno słowo kluczowe.';
-    }
-    if (!trimmed.includes(',') && trimmed.split(/\s+/).length >= 3) {
-      return 'Wiele słów kluczowych należy rozdzielić przecinkiem (np. oprogramowanie, java, python).';
-    }
-    return null;
+  const toggleSort = (key) => {
+    setSortConfig((prev) => ({
+      key,
+      dir: prev.key === key && prev.dir === 'asc' ? 'desc' : 'asc',
+    }));
   };
+
+  const sortedCategories = useMemo(() => {
+    const copy = [...categories];
+    copy.sort((a, b) => {
+      const { key, dir } = sortConfig;
+      const mult = dir === 'asc' ? 1 : -1;
+      return String(a[key] ?? '').localeCompare(String(b[key] ?? ''), 'pl') * mult;
+    });
+    return copy;
+  }, [categories, sortConfig]);
 
   const handleCreateCategory = async (e) => {
     e.preventDefault();
-    setErrorMsg('');
-
-    const validationError = validateRawWords(keywordsInput);
-    if (validationError) {
-      setErrorMsg(validationError);
-      return;
-    }
+    if (!keywordsInput.trim()) return;
 
     const words = keywordsInput
       .split(',')
@@ -104,13 +101,11 @@ export default function KeywordsView() {
       setKeywordsInput('');
       fetchCategories();
     } catch (err) {
-      setErrorMsg(err.response?.data?.message || 'Błąd podczas tworzenia kategorii.');
+      console.error('Błąd tworzenia kategorii:', err);
     }
   };
 
-  // Kliknięcie w konkretne słowo kluczowe w tabeli
   const handleSelectKeyword = (cat, index, kwObj) => {
-    setErrorMsg('');
     setSelectedKeyword({
       catId: cat.id,
       catName: cat.name,
@@ -121,7 +116,6 @@ export default function KeywordsView() {
     });
   };
 
-  // Zapisanie wagi (1-100) lub wykluczenia dla klikniętego słowa
   const handleSaveSelectedKeyword = async () => {
     if (!selectedKeyword) return;
     const cat = categories.find((c) => c.id === selectedKeyword.catId);
@@ -146,46 +140,41 @@ export default function KeywordsView() {
       setSelectedKeyword(null);
       fetchCategories();
     } catch (err) {
-      setErrorMsg(err.response?.data?.message || 'Błąd zapisywania wagi słowa kluczowego.');
+      console.error('Błąd zapisu słowa:', err);
     }
   };
 
-  // Usunięcie pojedynczego słowa z kategorii
-  const handleRemoveSingleKeyword = async () => {
+  const confirmRemoveSingleKeyword = () => {
     if (!selectedKeyword) return;
     const cat = categories.find((c) => c.id === selectedKeyword.catId);
     if (!cat) return;
 
     const list = parseKeywordsString(cat.keywords);
-    if (list.length <= 1) {
-      setErrorMsg('Kategoria musi posiadać przynajmniej jedno słowo kluczowe.');
-      return;
-    }
+    if (list.length <= 1) return;
 
-    const nextList = list.filter((_, idx) => idx !== selectedKeyword.wordIndex);
-    try {
-      await api.put(`/keywords/${cat.id}`, {
-        name: cat.name,
-        keywords: serializeKeywordsList(nextList),
-        score: 50,
-        isExcluded: false,
-      });
-      setSelectedKeyword(null);
-      fetchCategories();
-    } catch (err) {
-      setErrorMsg(err.response?.data?.message || 'Błąd podczas usuwania słowa.');
-    }
+    setConfirmDialog({
+      title: 'Usuń słowo kluczowe',
+      message: `Czy na pewno chcesz usunąć słowo "${selectedKeyword.word}" z kategorii "${cat.name}"?`,
+      onConfirm: async () => {
+        try {
+          const nextList = list.filter((_, idx) => idx !== selectedKeyword.wordIndex);
+          await api.put(`/keywords/${cat.id}`, {
+            name: cat.name,
+            keywords: serializeKeywordsList(nextList),
+            score: 50,
+            isExcluded: false,
+          });
+          setSelectedKeyword(null);
+          fetchCategories();
+        } finally {
+          setConfirmDialog(null);
+        }
+      },
+    });
   };
 
-  // Dodanie nowych słów do istniejącej kategorii
   const handleAddWordsToCategory = async (cat) => {
-    setErrorMsg('');
-    const validationError = validateRawWords(newWordsText);
-    if (validationError) {
-      setErrorMsg(validationError);
-      return;
-    }
-
+    if (!newWordsText.trim()) return;
     const existing = parseKeywordsString(cat.keywords);
     const added = newWordsText
       .split(',')
@@ -205,11 +194,10 @@ export default function KeywordsView() {
       setNewWordsText('');
       fetchCategories();
     } catch (err) {
-      setErrorMsg(err.response?.data?.message || 'Błąd dodawania słów do kategorii.');
+      console.error('Błąd dodawania słów:', err);
     }
   };
 
-  // Zmiana samej nazwy kategorii
   const handleSaveCategoryName = async (cat) => {
     if (!editCatName.trim()) return;
     try {
@@ -222,15 +210,24 @@ export default function KeywordsView() {
       setEditingCatId(null);
       fetchCategories();
     } catch (err) {
-      setErrorMsg(err.response?.data?.message || 'Błąd zmiany nazwy kategorii.');
+      console.error('Błąd zmiany nazwy:', err);
     }
   };
 
-  const handleDeleteCategory = async (id) => {
-    if (!confirm('Czy na pewno chcesz usunąć całą kategorię słów kluczowych?')) return;
-    await api.delete(`/keywords/${id}`);
-    if (selectedKeyword?.catId === id) setSelectedKeyword(null);
-    fetchCategories();
+  const confirmDeleteCategory = (cat) => {
+    setConfirmDialog({
+      title: 'Usuń kategorię słów kluczowych',
+      message: `Czy na pewno chcesz usunąć kategorię "${cat.name}" wraz ze wszystkimi jej słowami?`,
+      onConfirm: async () => {
+        try {
+          await api.delete(`/keywords/${cat.id}`);
+          if (selectedKeyword?.catId === cat.id) setSelectedKeyword(null);
+          fetchCategories();
+        } finally {
+          setConfirmDialog(null);
+        }
+      },
+    });
   };
 
   const previewWords = keywordsInput
@@ -240,24 +237,29 @@ export default function KeywordsView() {
 
   return (
     <div className="space-y-6 text-black">
+      {confirmDialog && (
+        <ConfirmModal
+          isOpen={true}
+          open={true}
+          title={confirmDialog.title}
+          message={confirmDialog.message}
+          description={confirmDialog.message}
+          onConfirm={confirmDialog.onConfirm}
+          onCancel={() => setConfirmDialog(null)}
+          onClose={() => setConfirmDialog(null)}
+        />
+      )}
+
       <div className="flex items-center gap-2">
         <KeyRound size={24} className="text-blue-600" />
         <div>
           <h2 className="text-2xl font-bold text-black">Kategorie i Wagi Słów Kluczowych</h2>
           <p className="text-xs font-semibold text-black">
-            Najpierw utwórz kategorię ze słowami kluczowymi, a następnie kliknij w wybrane słowo na liście poniżej, aby nadać mu wagę (1–100) lub wykluczyć.
+            Utwórz kategorię ze słowami kluczowymi, a następnie kliknij w wybrane słowo na liście poniżej, aby nadać mu wagę (1–100) lub wykluczyć.
           </p>
         </div>
       </div>
 
-      {errorMsg && (
-        <div className="flex items-center gap-2 p-4 bg-red-100 border-2 border-red-600 rounded-xl text-black font-bold text-sm">
-          <AlertCircle size={18} className="text-red-700 shrink-0" />
-          <span>{errorMsg}</span>
-        </div>
-      )}
-
-      {/* KROK 1: Formularz dodawania kategorii (BEZ suwaka i BEZ checkboxa wykluczenia) */}
       <form
         onSubmit={handleCreateCategory}
         className="bg-white p-6 rounded-xl border border-blue-200 space-y-4 shadow-xs"
@@ -292,9 +294,9 @@ export default function KeywordsView() {
                 {previewWords.map((w, idx) => (
                   <span
                     key={idx}
-                    className="px-2.5 py-0.5 bg-blue-50 border border-blue-300 rounded text-xs font-bold text-black"
+                    className="px-2.5 py-0.5 bg-slate-200 border border-slate-400 rounded text-xs font-bold text-black"
                   >
-                    {w}: 50 (domyślnie)
+                    {w}: 50
                   </span>
                 ))}
               </div>
@@ -312,7 +314,6 @@ export default function KeywordsView() {
         </div>
       </form>
 
-      {/* KROK 2: Panel edycji klikniętego słowa kluczowego (Suwak 1-100 + Wyklucz) */}
       {selectedKeyword && (
         <div className="bg-white p-6 rounded-xl border-2 border-blue-600 shadow-md space-y-4">
           <div className="flex items-center justify-between border-b border-blue-100 pb-3">
@@ -335,7 +336,6 @@ export default function KeywordsView() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-center bg-slate-50 p-4 rounded-xl border border-blue-200">
-            {/* Suwak 1-100 (wyszarzony i zablokowany, gdy zaznaczono Wyklucz) */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <label
@@ -382,7 +382,6 @@ export default function KeywordsView() {
               </div>
             </div>
 
-            {/* Checkbox Wyklucz + Przyciski akcji */}
             <div className="flex flex-col justify-between gap-4">
               <label className="flex items-center gap-2.5 p-3 bg-white rounded-xl border-2 border-red-300 cursor-pointer select-none">
                 <input
@@ -401,7 +400,7 @@ export default function KeywordsView() {
               <div className="flex items-center justify-end gap-2">
                 <button
                   type="button"
-                  onClick={handleRemoveSingleKeyword}
+                  onClick={confirmRemoveSingleKeyword}
                   className="flex items-center gap-1 px-3.5 py-2 bg-white border border-red-400 hover:bg-red-50 text-black font-bold rounded-lg text-xs cursor-pointer"
                 >
                   <Trash2 size={14} /> Usuń słowo
@@ -426,27 +425,39 @@ export default function KeywordsView() {
         </div>
       )}
 
-      {/* Tabela kategorii ze słowami kluczowymi */}
       <div className="bg-white rounded-xl border border-blue-200 overflow-hidden shadow-xs">
         <table className="w-full text-left border-collapse text-sm">
           <thead>
-            <tr className="bg-blue-600 text-white">
-              <th className="p-3.5 font-bold w-64">Nazwa kategorii</th>
-              <th className="p-3.5 font-bold">
-                Słowa kluczowe (Kliknij w słowo, aby zmienić wagę 1–100 lub wykluczyć)
+            <tr className="bg-blue-600 text-white select-none">
+              <th
+                onClick={() => toggleSort('name')}
+                className="p-3.5 font-bold w-64 cursor-pointer hover:bg-blue-700"
+              >
+                <div className="inline-flex items-center gap-1">
+                  Nazwa kategorii <ArrowUpDown size={14} />
+                </div>
+              </th>
+              <th
+                onClick={() => toggleSort('keywords')}
+                className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
+              >
+                <div className="inline-flex items-center gap-1">
+                  Słowa kluczowe (Kliknij w słowo, aby zmienić wagę 1–100 lub wykluczyć){' '}
+                  <ArrowUpDown size={14} />
+                </div>
               </th>
               <th className="p-3.5 font-bold text-right w-44">Akcje</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-blue-100">
-            {categories.length === 0 ? (
+            {sortedCategories.length === 0 ? (
               <tr>
                 <td colSpan="3" className="p-6 text-center font-medium">
-                  Brak zdefiniowanych kategorii słów kluczowych. Dodaj pierwszą kategorię powyżej.
+                  Brak zdefiniowanych kategorii słów kluczowych.
                 </td>
               </tr>
             ) : (
-              categories.map((cat) => {
+              sortedCategories.map((cat) => {
                 const parsedList = parseKeywordsString(cat.keywords);
                 const isEditingName = editingCatId === cat.id;
                 const isAddingWords = addingWordCatId === cat.id;
@@ -494,7 +505,6 @@ export default function KeywordsView() {
                               key={idx}
                               type="button"
                               onClick={() => handleSelectKeyword(cat, idx, kw)}
-                              title="Kliknij, aby ustawić wagę lub wykluczyć"
                               className={`px-3 py-1.5 rounded-lg text-xs font-extrabold border-2 transition transform active:scale-95 cursor-pointer ${
                                 kw.isExcluded
                                   ? 'bg-red-400 hover:bg-red-500 border-red-800 text-black'
@@ -561,7 +571,7 @@ export default function KeywordsView() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => handleDeleteCategory(cat.id)}
+                          onClick={() => confirmDeleteCategory(cat)}
                           className="flex items-center gap-1 px-3 py-1.5 bg-white border border-blue-300 hover:bg-red-50 text-black rounded-lg font-bold text-xs cursor-pointer"
                         >
                           <Trash2 size={14} /> Usuń

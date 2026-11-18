@@ -1,12 +1,15 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import api from '../api';
-import { Trash2, Plus, Pencil, Check, X, Lightbulb, CheckCircle2, XCircle } from 'lucide-react';
+import ConfirmModal from './ConfirmModal';
+import { Trash2, Plus, Pencil, Check, X, Lightbulb, ArrowUpDown } from 'lucide-react';
 
-const PAGE_SIZE = 5;
+const PAGE_SIZE = 10;
 
 export default function EndpointsView() {
   const [endpoints, setEndpoints] = useState([]);
   const [page, setPage] = useState(0);
+  const [sortConfig, setSortConfig] = useState({ key: 'id', dir: 'asc' });
+  const [confirmDialog, setConfirmDialog] = useState(null);
 
   const [newEndpoint, setNewEndpoint] = useState({
     name: '',
@@ -19,7 +22,7 @@ export default function EndpointsView() {
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({});
   const [testingId, setTestingId] = useState(null);
-  const [banner, setBanner] = useState(null);
+  const [testStatuses, setTestStatuses] = useState({});
 
   const fetchEndpoints = async () => {
     try {
@@ -34,16 +37,37 @@ export default function EndpointsView() {
     fetchEndpoints();
   }, []);
 
-  const totalPages = Math.max(1, Math.ceil(endpoints.length / PAGE_SIZE));
+  const toggleSort = (key) => {
+    setSortConfig((prev) => ({
+      key,
+      dir: prev.key === key && prev.dir === 'asc' ? 'desc' : 'asc',
+    }));
+  };
+
+  const sortedEndpoints = useMemo(() => {
+    const copy = [...endpoints];
+    copy.sort((a, b) => {
+      const { key, dir } = sortConfig;
+      const mult = dir === 'asc' ? 1 : -1;
+      const valA = a[key] ?? '';
+      const valB = b[key] ?? '';
+      if (typeof valA === 'boolean' && typeof valB === 'boolean') {
+        return (valA === valB ? 0 : valA ? -1 : 1) * mult;
+      }
+      return String(valA).localeCompare(String(valB), 'pl') * mult;
+    });
+    return copy;
+  }, [endpoints, sortConfig]);
+
+  const totalPages = Math.max(1, Math.ceil(sortedEndpoints.length / PAGE_SIZE));
   const currentPage = Math.min(page, totalPages - 1);
-  const paginatedEndpoints = endpoints.slice(
+  const paginatedEndpoints = sortedEndpoints.slice(
     currentPage * PAGE_SIZE,
     currentPage * PAGE_SIZE + PAGE_SIZE
   );
 
   const handleCreate = async (e) => {
     e.preventDefault();
-    setBanner(null);
     try {
       await api.post('/admin/endpoints', {
         ...newEndpoint,
@@ -52,35 +76,21 @@ export default function EndpointsView() {
         payload: newEndpoint.payload.trim() || null,
       });
       setNewEndpoint({ name: '', url: '', httpMethod: 'GET', payload: '', isActive: true });
-      setBanner({
-        type: 'success',
-        title: 'Dodano źródło',
-        text: 'Nowy endpoint / scraper został zapisany w bazie danych.',
-      });
       fetchEndpoints();
     } catch (err) {
-      setBanner({
-        type: 'error',
-        title: 'Błąd dodawania źródła',
-        text: err.response?.data?.message || 'Sprawdź poprawność adresu URL i spróbuj ponownie.',
-      });
+      console.error('Błąd dodawania źródła:', err);
     }
   };
 
   const handleToggleActive = async (ep) => {
-    setBanner(null);
     try {
       await api.put(`/admin/endpoints/${ep.id}`, {
         ...ep,
         isActive: !ep.isActive,
       });
       fetchEndpoints();
-    } catch {
-      setBanner({
-        type: 'error',
-        title: 'Błąd zmiany statusu',
-        text: 'Nie udało się zmienić statusu źródła.',
-      });
+    } catch (err) {
+      console.error('Błąd zmiany statusu:', err);
     }
   };
 
@@ -96,52 +106,43 @@ export default function EndpointsView() {
   };
 
   const saveEdit = async (id) => {
-    setBanner(null);
     try {
       await api.put(`/admin/endpoints/${id}`, {
         ...editForm,
         payload: editForm.payload.trim() || null,
       });
       setEditingId(null);
-      setBanner({
-        type: 'success',
-        title: 'Zapisano zmiany',
-        text: 'Konfiguracja źródła została zaktualizowana.',
-      });
       fetchEndpoints();
     } catch (err) {
-      setBanner({
-        type: 'error',
-        title: 'Błąd zapisu',
-        text: err.response?.data?.message || 'Nie udało się zapisać zmian endpointu.',
-      });
+      console.error('Błąd zapisu endpointu:', err);
     }
   };
 
-  const handleDelete = async (id) => {
-    if (!confirm('Czy na pewno chcesz usunąć to źródło?')) return;
-    setBanner(null);
-    await api.delete(`/admin/endpoints/${id}`);
-    fetchEndpoints();
+  const confirmDelete = (ep) => {
+    setConfirmDialog({
+      title: 'Usuń źródło danych',
+      message: `Czy na pewno chcesz usunąć endpoint "${ep.name}"?`,
+      onConfirm: async () => {
+        try {
+          await api.delete(`/admin/endpoints/${ep.id}`);
+          fetchEndpoints();
+        } finally {
+          setConfirmDialog(null);
+        }
+      },
+    });
   };
 
   const handleTestConnection = async (ep) => {
     setTestingId(ep.id);
-    setBanner(null);
     try {
       const res = await api.post(`/admin/endpoints/${ep.id}/test`);
-      const data = res.data;
-      setBanner({
-        type: data.success ? 'success' : 'error',
-        title: `Test połączenia (bez pobierania przetargów): ${ep.name}`,
-        text: data.message,
-      });
-    } catch (err) {
-      setBanner({
-        type: 'error',
-        title: `Test połączenia: ${ep.name}`,
-        text: err.response?.data?.message || 'Nie udało się wykonać testu połączenia.',
-      });
+      setTestStatuses((prev) => ({
+        ...prev,
+        [ep.id]: res.data.success ? 'OK' : 'ERR',
+      }));
+    } catch {
+      setTestStatuses((prev) => ({ ...prev, [ep.id]: 'ERR' }));
     } finally {
       setTestingId(null);
     }
@@ -149,36 +150,22 @@ export default function EndpointsView() {
 
   return (
     <div className="space-y-6 text-black">
-      <h2 className="text-2xl font-bold text-black">Zarządzanie Źródłami Danych (API i Web Scraper)</h2>
-
-      {banner && (
-        <div
-          className={`flex items-start justify-between gap-4 p-4 rounded-xl border-2 shadow-xs ${
-            banner.type === 'success'
-              ? 'bg-green-100 border-green-700 text-black'
-              : 'bg-red-100 border-red-700 text-black'
-          }`}
-        >
-          <div className="flex items-start gap-3">
-            {banner.type === 'success' ? (
-              <CheckCircle2 size={22} className="text-green-800 shrink-0 mt-0.5" />
-            ) : (
-              <XCircle size={22} className="text-red-800 shrink-0 mt-0.5" />
-            )}
-            <div>
-              <div className="font-extrabold text-sm">{banner.title}</div>
-              <div className="text-sm mt-0.5">{banner.text}</div>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => setBanner(null)}
-            className="p-1 rounded-lg hover:bg-black/10 cursor-pointer"
-          >
-            <X size={18} />
-          </button>
-        </div>
+      {confirmDialog && (
+        <ConfirmModal
+          isOpen={true}
+          open={true}
+          title={confirmDialog.title}
+          message={confirmDialog.message}
+          description={confirmDialog.message}
+          onConfirm={confirmDialog.onConfirm}
+          onCancel={() => setConfirmDialog(null)}
+          onClose={() => setConfirmDialog(null)}
+        />
       )}
+
+      <h2 className="text-2xl font-bold text-black">
+        Zarządzanie Źródłami Danych (API i Web Scraper)
+      </h2>
 
       <form
         onSubmit={handleCreate}
@@ -245,11 +232,39 @@ export default function EndpointsView() {
       <div className="bg-white rounded-xl border border-blue-200 overflow-hidden shadow-xs">
         <table className="w-full text-left border-collapse text-sm">
           <thead>
-            <tr className="bg-blue-600 text-white">
-              <th className="p-3.5 font-bold">Nazwa</th>
-              <th className="p-3.5 font-bold">Tryb</th>
-              <th className="p-3.5 font-bold">URL i Parametry</th>
-              <th className="p-3.5 font-bold">Status (Kliknij, aby zmienić)</th>
+            <tr className="bg-blue-600 text-white select-none">
+              <th
+                onClick={() => toggleSort('name')}
+                className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
+              >
+                <div className="inline-flex items-center gap-1">
+                  Nazwa <ArrowUpDown size={14} />
+                </div>
+              </th>
+              <th
+                onClick={() => toggleSort('httpMethod')}
+                className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
+              >
+                <div className="inline-flex items-center gap-1">
+                  Tryb <ArrowUpDown size={14} />
+                </div>
+              </th>
+              <th
+                onClick={() => toggleSort('url')}
+                className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
+              >
+                <div className="inline-flex items-center gap-1">
+                  URL i Parametry <ArrowUpDown size={14} />
+                </div>
+              </th>
+              <th
+                onClick={() => toggleSort('isActive')}
+                className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
+              >
+                <div className="inline-flex items-center gap-1">
+                  Status <ArrowUpDown size={14} />
+                </div>
+              </th>
               <th className="p-3.5 font-bold text-right">Akcje</th>
             </tr>
           </thead>
@@ -257,12 +272,13 @@ export default function EndpointsView() {
             {paginatedEndpoints.length === 0 ? (
               <tr>
                 <td colSpan="5" className="p-6 text-center font-medium text-black">
-                  Brak dodanych źródeł. Dodaj pierwszy endpoint API lub Web Scraper powyżej.
+                  Brak dodanych źródeł.
                 </td>
               </tr>
             ) : (
               paginatedEndpoints.map((ep) => {
                 const isEditing = editingId === ep.id;
+                const testState = testStatuses[ep.id];
 
                 return (
                   <tr key={ep.id} className="hover:bg-blue-50/50">
@@ -349,11 +365,22 @@ export default function EndpointsView() {
                           type="button"
                           onClick={() => handleTestConnection(ep)}
                           disabled={testingId === ep.id}
-                          title="Sprawdź połączenie (nie pobiera przetargów do bazy)"
-                          className="flex items-center gap-1 px-2.5 py-1.5 bg-amber-100 hover:bg-amber-200 border-2 border-amber-500 text-black rounded-lg font-bold text-xs cursor-pointer transition"
+                          className={`flex items-center gap-1 px-2.5 py-1.5 border-2 text-black rounded-lg font-bold text-xs cursor-pointer transition ${
+                            testState === 'OK'
+                              ? 'bg-green-300 border-green-700'
+                              : testState === 'ERR'
+                              ? 'bg-red-300 border-red-700'
+                              : 'bg-amber-100 hover:bg-amber-200 border-amber-500'
+                          }`}
                         >
                           <Lightbulb size={15} className={testingId === ep.id ? 'animate-pulse' : ''} />
-                          {testingId === ep.id ? 'Test...' : 'Testuj'}
+                          {testingId === ep.id
+                            ? 'Test...'
+                            : testState === 'OK'
+                            ? 'OK'
+                            : testState === 'ERR'
+                            ? 'Błąd'
+                            : 'Testuj'}
                         </button>
 
                         {isEditing ? (
@@ -380,7 +407,7 @@ export default function EndpointsView() {
                               <Pencil size={14} /> Edytuj
                             </button>
                             <button
-                              onClick={() => handleDelete(ep.id)}
+                              onClick={() => confirmDelete(ep)}
                               className="flex items-center gap-1 px-3 py-1.5 bg-white border border-blue-300 hover:bg-red-50 text-black rounded-lg font-bold text-xs cursor-pointer"
                             >
                               <Trash2 size={14} /> Usuń
@@ -397,7 +424,7 @@ export default function EndpointsView() {
         </table>
       </div>
 
-      {/* Paginacja */}
+      {/* Paginacja (10 endpointów na stronę) */}
       <div className="flex items-center justify-between">
         <button
           disabled={currentPage === 0}
@@ -407,7 +434,7 @@ export default function EndpointsView() {
           Poprzednia
         </button>
         <span className="font-bold text-sm text-black">
-          Strona {currentPage + 1} z {totalPages} (łącznie: {endpoints.length})
+          Strona {currentPage + 1} z {totalPages} (łącznie: {sortedEndpoints.length}, po {PAGE_SIZE} na stronę)
         </span>
         <button
           disabled={currentPage + 1 >= totalPages}

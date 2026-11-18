@@ -1,8 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import api from '../api';
-import { Search, Filter, RotateCcw, Trash2, Eye, X } from 'lucide-react';
+import ConfirmModal from './ConfirmModal';
+import { Search, RotateCcw, Trash2, Eye, X, ArrowUpDown } from 'lucide-react';
 
 const STATUSES = ['NEW', 'INTERESTED'];
+const PAGE_SIZE = 10;
 
 export function getTenderScoreDisplay(tender) {
   if (tender?.description) {
@@ -16,49 +18,78 @@ export function getTenderScoreDisplay(tender) {
   return `${tender?.score ?? 0} pkt`;
 }
 
+function parseCategoryScoreMap(tender) {
+  const map = {};
+  if (!tender?.description) return map;
+  const line = tender.description
+    .split('\n')
+    .find((l) => l.startsWith('Punktacja kategorii:'));
+  if (!line) return map;
+
+  const content = line.replace('Punktacja kategorii:', '').trim();
+  content.split('/').forEach((part) => {
+    const idx = part.lastIndexOf(':');
+    if (idx > 0) {
+      const catName = part.substring(0, idx).trim().toLowerCase();
+      const pts = parseInt(part.substring(idx + 1).trim(), 10);
+      if (!Number.isNaN(pts)) {
+        map[catName] = pts;
+      }
+    }
+  });
+  return map;
+}
+
 export default function TendersView() {
-  const [tenders, setTenders] = useState([]);
+  const [allTenders, setAllTenders] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [sortConfig, setSortConfig] = useState({ key: 'publicationDate', dir: 'desc' });
+  const [confirmDialog, setConfirmDialog] = useState(null);
+
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
-  const [minScore, setMinScore] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('');
+  const [minCategoryScore, setMinCategoryScore] = useState('');
+  const [minTotalScore, setMinTotalScore] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
-  const [page, setPage] = useState(0);
-  const [totalPages, setTotalPages] = useState(1);
 
+  const [page, setPage] = useState(0);
   const [selectedTender, setSelectedTender] = useState(null);
 
-  const fetchTenders = async () => {
+  const fetchTendersAndCategories = async () => {
     try {
-      const params = { page, size: 10 };
-      if (search.trim()) params.search = search.trim();
-      if (statusFilter) params.status = statusFilter;
-      if (minScore !== '') params.minScore = minScore;
-
-      const res = await api.get('/tenders', { params });
-      const content = res.data.content || [];
-      setTenders(content);
-      const total = res.data.totalPages ?? res.data.page?.totalPages ?? 1;
-      setTotalPages(Math.max(1, total));
+      const [tendersRes, kwRes] = await Promise.all([
+        api.get('/tenders', { params: { page: 0, size: 1000 } }),
+        api.get('/keywords').catch(() => ({ data: [] })),
+      ]);
+      const content = tendersRes.data?.content || [];
+      setAllTenders(content);
+      setCategories(kwRes.data || []);
     } catch (err) {
       console.error('Błąd pobierania przetargów:', err);
     }
   };
 
   useEffect(() => {
-    fetchTenders();
-  }, [page, statusFilter]);
+    fetchTendersAndCategories();
+    const interval = setInterval(fetchTendersAndCategories, 12000);
+    return () => clearInterval(interval);
+  }, []);
 
-  const handleSearchSubmit = (e) => {
-    e.preventDefault();
-    setPage(0);
-    fetchTenders();
+  const toggleSort = (key) => {
+    setSortConfig((prev) => ({
+      key,
+      dir: prev.key === key && prev.dir === 'asc' ? 'desc' : 'asc',
+    }));
   };
 
   const handleResetFilters = () => {
     setSearch('');
     setStatusFilter('');
-    setMinScore('');
+    setCategoryFilter('');
+    setMinCategoryScore('');
+    setMinTotalScore('');
     setDateFrom('');
     setDateTo('');
     setPage(0);
@@ -72,161 +103,325 @@ export default function TendersView() {
       if (selectedTender && selectedTender.id === tender.id) {
         setSelectedTender({ ...selectedTender, status: nextStatus });
       }
-      fetchTenders();
+      fetchTendersAndCategories();
     } catch (err) {
       console.error('Błąd zmiany statusu:', err);
     }
   };
 
-  const handleDeleteTender = async (e, id) => {
+  const confirmDeleteTender = (e, tender) => {
     e.stopPropagation();
-    if (!confirm('Czy na pewno chcesz usunąć ten przetarg?')) return;
-    try {
-      await api.delete(`/tenders/${id}`);
-      if (selectedTender && selectedTender.id === id) {
-        setSelectedTender(null);
-      }
-      fetchTenders();
-    } catch (err) {
-      console.error('Błąd usuwania przetargu:', err);
-    }
+    setConfirmDialog({
+      title: 'Usuń przetarg',
+      message: `Czy na pewno chcesz usunąć przetarg "${tender.title}" (${tender.externalId})?`,
+      onConfirm: async () => {
+        try {
+          await api.delete(`/tenders/${tender.id}`);
+          if (selectedTender && selectedTender.id === tender.id) {
+            setSelectedTender(null);
+          }
+          fetchTendersAndCategories();
+        } finally {
+          setConfirmDialog(null);
+        }
+      },
+    });
   };
 
-  const filteredTenders = tenders.filter((t) => {
-    if (!dateFrom && !dateTo) return true;
-    if (!t.publicationDate) return false;
+  const filteredAndSortedTenders = useMemo(() => {
+    const filtered = allTenders.filter((t) => {
+      if (search.trim()) {
+        const q = search.trim().toLowerCase();
+        const combined = `${t.externalId || ''} ${t.title || ''} ${t.description || ''}`.toLowerCase();
+        if (!combined.includes(q)) return false;
+      }
 
-    const pubTime = new Date(t.publicationDate).setHours(0, 0, 0, 0);
-    if (dateFrom) {
-      const fromTime = new Date(dateFrom).setHours(0, 0, 0, 0);
-      if (pubTime < fromTime) return false;
-    }
-    if (dateTo) {
-      const toTime = new Date(dateTo).setHours(23, 59, 59, 999);
-      if (pubTime > toTime) return false;
-    }
-    return true;
-  });
+      if (statusFilter && t.status !== statusFilter) return false;
+
+      if (minTotalScore !== '') {
+        const minSum = Number(minTotalScore);
+        if (!Number.isNaN(minSum) && (Number(t.score) || 0) < minSum) return false;
+      }
+
+      const catScoreMap = parseCategoryScoreMap(t);
+      if (categoryFilter) {
+        const catKey = categoryFilter.toLowerCase();
+        const achievedInCat = catScoreMap[catKey];
+        if (achievedInCat === undefined) return false;
+        if (minCategoryScore !== '') {
+          const minCat = Number(minCategoryScore);
+          if (!Number.isNaN(minCat) && achievedInCat < minCat) return false;
+        }
+      } else if (minCategoryScore !== '') {
+        const minCat = Number(minCategoryScore);
+        const values = Object.values(catScoreMap);
+        if (values.length === 0 || !values.some((v) => v >= minCat)) return false;
+      }
+
+      if (dateFrom || dateTo) {
+        if (!t.publicationDate) return false;
+        const pubTime = new Date(t.publicationDate).setHours(0, 0, 0, 0);
+        if (dateFrom) {
+          const fromTime = new Date(dateFrom).setHours(0, 0, 0, 0);
+          if (pubTime < fromTime) return false;
+        }
+        if (dateTo) {
+          const toTime = new Date(dateTo).setHours(23, 59, 59, 999);
+          if (pubTime > toTime) return false;
+        }
+      }
+
+      return true;
+    });
+
+    filtered.sort((a, b) => {
+      const { key, dir } = sortConfig;
+      const mult = dir === 'asc' ? 1 : -1;
+      const valA = a[key] ?? '';
+      const valB = b[key] ?? '';
+      if (typeof valA === 'number' && typeof valB === 'number') {
+        return (valA - valB) * mult;
+      }
+      return String(valA).localeCompare(String(valB), 'pl') * mult;
+    });
+
+    return filtered;
+  }, [
+    allTenders,
+    search,
+    statusFilter,
+    categoryFilter,
+    minCategoryScore,
+    minTotalScore,
+    dateFrom,
+    dateTo,
+    sortConfig,
+  ]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredAndSortedTenders.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages - 1);
+  const paginatedTenders = filteredAndSortedTenders.slice(
+    currentPage * PAGE_SIZE,
+    currentPage * PAGE_SIZE + PAGE_SIZE
+  );
 
   return (
     <div className="space-y-6 text-black">
+      {confirmDialog && (
+        <ConfirmModal
+          isOpen={true}
+          open={true}
+          title={confirmDialog.title}
+          message={confirmDialog.message}
+          description={confirmDialog.message}
+          onConfirm={confirmDialog.onConfirm}
+          onCancel={() => setConfirmDialog(null)}
+          onClose={() => setConfirmDialog(null)}
+        />
+      )}
+
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold text-black">Lista Przetargów</h2>
           <p className="text-xs font-semibold text-black mt-0.5">
-            Kliknij w wybrany wiersz przetargu, aby otworzyć pełne szczegóły ogłoszenia.
+            Kliknij w nagłówek kolumny, aby posortować wyniki, lub w wybrany przetarg, aby zobaczyć szczegóły.
           </p>
         </div>
       </div>
 
-      {/* Pasek filtrów */}
-      <form
-        onSubmit={handleSearchSubmit}
-        className="bg-white p-4 rounded-xl border border-blue-200 shadow-xs grid grid-cols-1 md:grid-cols-6 gap-3 items-end"
-      >
-        <div className="md:col-span-2">
-          <label className="block text-xs font-bold uppercase mb-1 text-black">Szukaj frazy</label>
-          <div className="relative">
-            <Search size={16} className="absolute left-3 top-3 text-blue-600" />
+      <div className="bg-white p-4 rounded-xl border border-blue-200 shadow-xs space-y-3">
+        <div className="grid grid-cols-1 md:grid-cols-6 gap-3 items-end">
+          <div className="md:col-span-2">
+            <label className="block text-xs font-bold uppercase mb-1 text-black">
+              Szukaj frazy
+            </label>
+            <div className="relative">
+              <Search size={16} className="absolute left-3 top-3 text-blue-600" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => {
+                  setSearch(e.target.value);
+                  setPage(0);
+                }}
+                placeholder="Tytuł, ID, zamawiający..."
+                className="w-full pl-9 pr-3 py-2 border border-blue-300 rounded-lg text-black focus:outline-none focus:border-blue-600"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold uppercase mb-1 text-black">
+              Kategoria (Score)
+            </label>
+            <select
+              value={categoryFilter}
+              onChange={(e) => {
+                setCategoryFilter(e.target.value);
+                setPage(0);
+              }}
+              className="w-full px-3 py-2 border border-blue-300 rounded-lg text-black bg-white font-semibold"
+            >
+              <option value="">Wszystkie kategorie</option>
+              {categories.map((c) => (
+                <option key={c.id} value={c.name}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold uppercase mb-1 text-black">
+              Min. pkt w kategorii
+            </label>
             <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Tytuł, kategoria, zamawiający..."
-              className="w-full pl-9 pr-3 py-2 border border-blue-300 rounded-lg text-black focus:outline-none focus:border-blue-600"
+              type="number"
+              value={minCategoryScore}
+              onChange={(e) => {
+                setMinCategoryScore(e.target.value);
+                setPage(0);
+              }}
+              placeholder={categoryFilter ? `Min. w ${categoryFilter}` : 'np. 50'}
+              className="w-full px-3 py-2 border border-blue-300 rounded-lg text-black"
             />
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold uppercase mb-1 text-black">
+              Min. Suma Punktów
+            </label>
+            <input
+              type="number"
+              value={minTotalScore}
+              onChange={(e) => {
+                setMinTotalScore(e.target.value);
+                setPage(0);
+              }}
+              placeholder="np. 100"
+              className="w-full px-3 py-2 border border-blue-300 rounded-lg text-black"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold uppercase mb-1 text-black">Status</label>
+            <select
+              value={statusFilter}
+              onChange={(e) => {
+                setStatusFilter(e.target.value);
+                setPage(0);
+              }}
+              className="w-full px-3 py-2 border border-blue-300 rounded-lg text-black bg-white"
+            >
+              <option value="">Wszystkie</option>
+              {STATUSES.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
 
-        <div>
-          <label className="block text-xs font-bold uppercase mb-1 text-black">Status</label>
-          <select
-            value={statusFilter}
-            onChange={(e) => {
-              setStatusFilter(e.target.value);
-              setPage(0);
-            }}
-            className="w-full px-3 py-2 border border-blue-300 rounded-lg text-black bg-white focus:outline-none focus:border-blue-600"
-          >
-            <option value="">Wszystkie</option>
-            {STATUSES.map((s) => (
-              <option key={s} value={s}>{s}</option>
-            ))}
-          </select>
-        </div>
+        <div className="grid grid-cols-1 md:grid-cols-6 gap-3 items-end pt-2 border-t border-blue-100">
+          <div>
+            <label className="block text-xs font-bold uppercase mb-1 text-black">Data od</label>
+            <input
+              type="date"
+              value={dateFrom}
+              onChange={(e) => {
+                setDateFrom(e.target.value);
+                setPage(0);
+              }}
+              className="w-full px-3 py-1.5 border border-blue-300 rounded-lg text-black text-xs"
+            />
+          </div>
 
-        <div>
-          <label className="block text-xs font-bold uppercase mb-1 text-black">Min. Score (Suma)</label>
-          <input
-            type="number"
-            value={minScore}
-            onChange={(e) => setMinScore(e.target.value)}
-            placeholder="np. 50"
-            className="w-full px-3 py-2 border border-blue-300 rounded-lg text-black focus:outline-none focus:border-blue-600"
-          />
-        </div>
+          <div>
+            <label className="block text-xs font-bold uppercase mb-1 text-black">Data do</label>
+            <input
+              type="date"
+              value={dateTo}
+              onChange={(e) => {
+                setDateTo(e.target.value);
+                setPage(0);
+              }}
+              className="w-full px-3 py-1.5 border border-blue-300 rounded-lg text-black text-xs"
+            />
+          </div>
 
-        <div>
-          <label className="block text-xs font-bold uppercase mb-1 text-black">Data od</label>
-          <input
-            type="date"
-            value={dateFrom}
-            onChange={(e) => setDateFrom(e.target.value)}
-            className="w-full px-3 py-2 border border-blue-300 rounded-lg text-black focus:outline-none focus:border-blue-600"
-          />
+          <div className="md:col-span-4 flex items-center justify-between md:justify-end gap-3">
+            <span className="text-xs font-extrabold text-black">
+              Znaleziono przetargów: {filteredAndSortedTenders.length}
+            </span>
+            <button
+              type="button"
+              onClick={handleResetFilters}
+              className="flex items-center gap-1.5 py-2 px-4 bg-white border border-blue-300 hover:bg-blue-50 text-black font-bold rounded-lg transition cursor-pointer text-xs"
+            >
+              <RotateCcw size={14} />
+              Wyczyść filtry
+            </button>
+          </div>
         </div>
+      </div>
 
-        <div>
-          <label className="block text-xs font-bold uppercase mb-1 text-black">Data do</label>
-          <input
-            type="date"
-            value={dateTo}
-            onChange={(e) => setDateTo(e.target.value)}
-            className="w-full px-3 py-2 border border-blue-300 rounded-lg text-black focus:outline-none focus:border-blue-600"
-          />
-        </div>
-
-        <div className="md:col-span-6 flex justify-end gap-2 pt-2 border-t border-blue-100">
-          <button
-            type="button"
-            onClick={handleResetFilters}
-            className="flex items-center gap-1.5 py-2 px-4 bg-white border border-blue-300 hover:bg-blue-50 text-black font-bold rounded-lg transition cursor-pointer text-sm"
-          >
-            <RotateCcw size={15} />
-            Wyczyść
-          </button>
-          <button
-            type="submit"
-            className="flex items-center gap-1.5 py-2 px-5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition cursor-pointer text-sm"
-          >
-            <Filter size={15} />
-            Filtruj wyniki
-          </button>
-        </div>
-      </form>
-
-      {/* Tabela przetargów */}
       <div className="bg-white rounded-xl border border-blue-200 overflow-hidden shadow-xs">
         <table className="w-full text-left border-collapse">
           <thead>
-            <tr className="bg-blue-600 text-white text-sm">
-              <th className="p-3.5 font-bold">ID Zewn.</th>
-              <th className="p-3.5 font-bold">Tytuł i skrót informacji</th>
-              <th className="p-3.5 font-bold text-center">Score (Kategorie)</th>
-              <th className="p-3.5 font-bold">Data publikacji</th>
-              <th className="p-3.5 font-bold">Status (Kliknij)</th>
+            <tr className="bg-blue-600 text-white text-sm select-none">
+              <th
+                onClick={() => toggleSort('externalId')}
+                className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
+              >
+                <div className="inline-flex items-center gap-1">
+                  ID Zewn. <ArrowUpDown size={14} />
+                </div>
+              </th>
+              <th
+                onClick={() => toggleSort('title')}
+                className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
+              >
+                <div className="inline-flex items-center gap-1">
+                  Tytuł i skrót informacji <ArrowUpDown size={14} />
+                </div>
+              </th>
+              <th
+                onClick={() => toggleSort('score')}
+                className="p-3.5 font-bold text-center cursor-pointer hover:bg-blue-700"
+              >
+                <div className="inline-flex items-center gap-1">
+                  Score (Kategorie i Suma) <ArrowUpDown size={14} />
+                </div>
+              </th>
+              <th
+                onClick={() => toggleSort('publicationDate')}
+                className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
+              >
+                <div className="inline-flex items-center gap-1">
+                  Data publikacji <ArrowUpDown size={14} />
+                </div>
+              </th>
+              <th
+                onClick={() => toggleSort('status')}
+                className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
+              >
+                <div className="inline-flex items-center gap-1">
+                  Status <ArrowUpDown size={14} />
+                </div>
+              </th>
               <th className="p-3.5 font-bold text-right">Akcje</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-blue-100 text-sm text-black">
-            {filteredTenders.length === 0 ? (
+            {paginatedTenders.length === 0 ? (
               <tr>
                 <td colSpan="6" className="p-6 text-center font-medium text-black">
-                  Brak przetargów spełniających kryteria.
+                  Brak przetargów spełniających wybrane kryteria.
                 </td>
               </tr>
             ) : (
-              filteredTenders.map((t) => {
+              paginatedTenders.map((t) => {
                 const scoreLabel = getTenderScoreDisplay(t);
                 return (
                   <tr
@@ -246,9 +441,12 @@ export default function TendersView() {
                       )}
                     </td>
                     <td className="p-3.5 text-center">
-                      <span className="inline-block px-3 py-1.5 rounded-lg font-extrabold text-xs bg-blue-100 border-2 border-blue-600 text-black">
-                        {scoreLabel}
-                      </span>
+                      <div className="inline-flex flex-col items-center gap-1 px-3 py-1.5 rounded-lg bg-blue-100 border-2 border-blue-600 text-black">
+                        <span className="font-extrabold text-xs">{scoreLabel}</span>
+                        <span className="text-[11px] font-bold bg-white px-2 py-0.5 rounded border border-blue-300">
+                          Suma: {t.score} pkt
+                        </span>
+                      </div>
                     </td>
                     <td className="p-3.5 whitespace-nowrap">
                       {t.publicationDate
@@ -259,7 +457,6 @@ export default function TendersView() {
                       <button
                         type="button"
                         onClick={(e) => handleToggleStatus(e, t)}
-                        title="Kliknij, aby zmienić status pomiędzy NEW a INTERESTED"
                         className={`px-3.5 py-1.5 rounded-lg text-xs font-extrabold border-2 shadow-xs transition transform active:scale-95 cursor-pointer ${
                           t.status === 'INTERESTED'
                             ? 'bg-green-400 hover:bg-green-500 border-green-800 text-black'
@@ -283,7 +480,7 @@ export default function TendersView() {
                         </button>
                         <button
                           type="button"
-                          onClick={(e) => handleDeleteTender(e, t.id)}
+                          onClick={(e) => confirmDeleteTender(e, t)}
                           className="inline-flex items-center gap-1 px-3 py-1.5 bg-white border border-red-400 hover:bg-red-100 text-black rounded-lg font-bold text-xs cursor-pointer"
                         >
                           <Trash2 size={14} /> Usuń
@@ -298,20 +495,19 @@ export default function TendersView() {
         </table>
       </div>
 
-      {/* Paginacja */}
       <div className="flex items-center justify-between">
         <button
-          disabled={page === 0}
+          disabled={currentPage === 0}
           onClick={() => setPage((p) => Math.max(0, p - 1))}
           className="px-4 py-2 bg-white border border-blue-400 rounded-lg font-bold text-black disabled:opacity-40 hover:bg-blue-50 cursor-pointer"
         >
           Poprzednia
         </button>
         <span className="font-bold text-sm text-black">
-          Strona {page + 1} z {totalPages}
+          Strona {currentPage + 1} z {totalPages}
         </span>
         <button
-          disabled={page + 1 >= totalPages}
+          disabled={currentPage + 1 >= totalPages}
           onClick={() => setPage((p) => p + 1)}
           className="px-4 py-2 bg-white border border-blue-400 rounded-lg font-bold text-black disabled:opacity-40 hover:bg-blue-50 cursor-pointer"
         >
@@ -319,7 +515,6 @@ export default function TendersView() {
         </button>
       </div>
 
-      {/* Modal pełnych szczegółów przetargu */}
       {selectedTender && (
         <div
           onClick={() => setSelectedTender(null)}
@@ -354,7 +549,7 @@ export default function TendersView() {
                   {getTenderScoreDisplay(selectedTender)}
                 </div>
                 <div className="text-[11px] font-semibold mt-0.5">
-                  Suma: {selectedTender.score} pkt
+                  Suma całkowita: {selectedTender.score} pkt
                 </div>
               </div>
               <div className="p-3 bg-blue-50/70 border border-blue-200 rounded-xl">
@@ -393,7 +588,7 @@ export default function TendersView() {
             <div className="flex items-center justify-between pt-3 border-t border-blue-100">
               <button
                 type="button"
-                onClick={(e) => handleDeleteTender(e, selectedTender.id)}
+                onClick={(e) => confirmDeleteTender(e, selectedTender)}
                 className="flex items-center gap-1.5 px-4 py-2 bg-red-400 hover:bg-red-500 border-2 border-red-800 text-black font-extrabold rounded-xl text-xs cursor-pointer"
               >
                 <Trash2 size={15} /> Usuń ten przetarg

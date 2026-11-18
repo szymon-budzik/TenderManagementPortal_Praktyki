@@ -23,8 +23,20 @@ public class AutomationProfile {
     @Column(nullable = false)
     private Boolean enabled = false;
 
-    @Column(name = "cron_time", nullable = false, length = 20)
+    @Column(name = "schedule_type", nullable = false, length = 30)
+    private String scheduleType = "DAILY"; // DAILY | MULTI_TIME | INTERVAL | WEEKLY
+
+    @Column(name = "cron_time", nullable = false, length = 255)
     private String cronTime = "08:00";
+
+    @Column(name = "interval_minutes")
+    private Integer intervalMinutes = 60;
+
+    @Column(name = "cron_days", length = 50)
+    private String cronDays = "1,2,3,4,5";
+
+    @Column(name = "smtp_account_id")
+    private Long smtpAccountId;
 
     @Column(name = "match_mode", nullable = false, length = 10)
     private String matchMode = "ANY";
@@ -56,8 +68,20 @@ public class AutomationProfile {
     public Boolean getEnabled() { return enabled; }
     public void setEnabled(Boolean enabled) { this.enabled = enabled; }
 
+    public String getScheduleType() { return scheduleType; }
+    public void setScheduleType(String scheduleType) { this.scheduleType = scheduleType; }
+
     public String getCronTime() { return cronTime; }
     public void setCronTime(String cronTime) { this.cronTime = cronTime; }
+
+    public Integer getIntervalMinutes() { return intervalMinutes; }
+    public void setIntervalMinutes(Integer intervalMinutes) { this.intervalMinutes = intervalMinutes; }
+
+    public String getCronDays() { return cronDays; }
+    public void setCronDays(String cronDays) { this.cronDays = cronDays; }
+
+    public Long getSmtpAccountId() { return smtpAccountId; }
+    public void setSmtpAccountId(Long smtpAccountId) { this.smtpAccountId = smtpAccountId; }
 
     public String getMatchMode() { return matchMode; }
     public void setMatchMode(String matchMode) { this.matchMode = matchMode; }

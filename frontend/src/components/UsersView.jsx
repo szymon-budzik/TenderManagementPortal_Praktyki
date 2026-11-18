@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import api from '../api';
-import { Trash2, Plus, Pencil, Check, X, Shield, AlertCircle } from 'lucide-react';
+import ConfirmModal from './ConfirmModal';
+import { Trash2, Plus, Pencil, Check, X, Shield, ArrowUpDown } from 'lucide-react';
 import {
   CONFIGURABLE_PERMISSIONS,
   getRoles,
@@ -13,7 +14,9 @@ import {
 export default function UsersView() {
   const [users, setUsers] = useState([]);
   const [roles, setRoles] = useState(() => getRoles());
-  const [errorMsg, setErrorMsg] = useState('');
+  const [userSort, setUserSort] = useState({ key: 'id', dir: 'asc' });
+  const [roleSort, setRoleSort] = useState({ key: 'name', dir: 'asc' });
+  const [confirmDialog, setConfirmDialog] = useState(null);
 
   const [newUser, setNewUser] = useState({
     username: '',
@@ -31,7 +34,7 @@ export default function UsersView() {
   const fetchUsers = async () => {
     try {
       const res = await api.get('/admin/users');
-      const list = Array.isArray(res.data) ? res.data : (res.data.content || []);
+      const list = Array.isArray(res.data) ? res.data : res.data.content || [];
       setUsers(list);
     } catch (err) {
       console.error('Błąd pobierania użytkowników:', err);
@@ -42,7 +45,40 @@ export default function UsersView() {
     fetchUsers();
   }, []);
 
-  // --- ROLE ---
+  const toggleSort = (setter, key) => {
+    setter((prev) => ({
+      key,
+      dir: prev.key === key && prev.dir === 'asc' ? 'desc' : 'asc',
+    }));
+  };
+
+  const sortedUsers = useMemo(() => {
+    const copy = [...users];
+    copy.sort((a, b) => {
+      const { key, dir } = userSort;
+      const mult = dir === 'asc' ? 1 : -1;
+      const valA = key === 'role' ? getEffectiveUserRole(a.username, a.role) : a[key] ?? '';
+      const valB = key === 'role' ? getEffectiveUserRole(b.username, b.role) : b[key] ?? '';
+      if (typeof valA === 'number' && typeof valB === 'number') {
+        return (valA - valB) * mult;
+      }
+      if (typeof valA === 'boolean' && typeof valB === 'boolean') {
+        return (valA === valB ? 0 : valA ? -1 : 1) * mult;
+      }
+      return String(valA).localeCompare(String(valB), 'pl') * mult;
+    });
+    return copy;
+  }, [users, userSort]);
+
+  const sortedRoles = useMemo(() => {
+    const copy = [...roles];
+    copy.sort((a, b) => {
+      const mult = roleSort.dir === 'asc' ? 1 : -1;
+      return String(a.name).localeCompare(String(b.name), 'pl') * mult;
+    });
+    return copy;
+  }, [roles, roleSort]);
+
   const toggleNewRolePerm = (permId) => {
     setNewRolePerms((prev) =>
       prev.includes(permId) ? prev.filter((p) => p !== permId) : [...prev, permId]
@@ -51,14 +87,8 @@ export default function UsersView() {
 
   const handleCreateRole = (e) => {
     e.preventDefault();
-    setErrorMsg('');
     const formattedName = newRoleName.trim().toUpperCase().replace(/\s+/g, '_');
-    if (!formattedName) return;
-
-    if (roles.some((r) => r.name === formattedName)) {
-      setErrorMsg('Rola o takiej nazwie już istnieje.');
-      return;
-    }
+    if (!formattedName || roles.some((r) => r.name === formattedName)) return;
 
     const updated = [...roles, { name: formattedName, permissions: newRolePerms, isSystem: false }];
     setRoles(updated);
@@ -80,17 +110,21 @@ export default function UsersView() {
     saveRoles(updated);
   };
 
-  const handleDeleteRole = (roleName) => {
-    if (!confirm(`Usunąć rolę ${roleName}?`)) return;
-    const updated = roles.filter((r) => r.name !== roleName);
-    setRoles(updated);
-    saveRoles(updated);
+  const confirmDeleteRole = (roleName) => {
+    setConfirmDialog({
+      title: 'Usuń rolę',
+      message: `Czy na pewno chcesz usunąć rolę "${roleName}"?`,
+      onConfirm: () => {
+        const updated = roles.filter((r) => r.name !== roleName);
+        setRoles(updated);
+        saveRoles(updated);
+        setConfirmDialog(null);
+      },
+    });
   };
 
-  // --- UŻYTKOWNICY ---
   const handleCreateUser = async (e) => {
     e.preventDefault();
-    setErrorMsg('');
     try {
       const backendRole = mapToBackendRole(newUser.role);
       await api.post('/admin/users', {
@@ -103,19 +137,16 @@ export default function UsersView() {
       setNewUser({ username: '', email: '', password: '', role: 'ROLE_USER' });
       fetchUsers();
     } catch (err) {
-      setErrorMsg(
-        err.response?.data?.message || 'Błąd dodawania użytkownika (sprawdź login, email i min. 6 znaków hasła).'
-      );
+      console.error('Błąd dodawania użytkownika:', err);
     }
   };
 
   const handleToggleUserActive = async (user) => {
-    setErrorMsg('');
     try {
       await api.patch(`/admin/users/${user.id}`, { isActive: !user.isActive });
       fetchUsers();
-    } catch {
-      setErrorMsg('Błąd zmiany statusu konta.');
+    } catch (err) {
+      console.error('Błąd zmiany statusu konta:', err);
     }
   };
 
@@ -129,7 +160,6 @@ export default function UsersView() {
   };
 
   const saveEditUser = async (id) => {
-    setErrorMsg('');
     try {
       const backendRole = mapToBackendRole(editUserForm.role);
       await api.patch(`/admin/users/${id}`, {
@@ -140,23 +170,38 @@ export default function UsersView() {
       setEditingUserId(null);
       fetchUsers();
     } catch (err) {
-      setErrorMsg(err.response?.data?.message || 'Błąd zapisu zmian użytkownika.');
+      console.error('Błąd zapisu użytkownika:', err);
     }
   };
 
-  const handleDeleteUser = async (id) => {
-    if (!confirm('Czy na pewno chcesz usunąć tego użytkownika?')) return;
-    await api.delete(`/admin/users/${id}`);
-    fetchUsers();
+  const confirmDeleteUser = (u) => {
+    setConfirmDialog({
+      title: 'Usuń użytkownika',
+      message: `Czy na pewno chcesz usunąć konto użytkownika "${u.username}"?`,
+      onConfirm: async () => {
+        try {
+          await api.delete(`/admin/users/${u.id}`);
+          fetchUsers();
+        } finally {
+          setConfirmDialog(null);
+        }
+      },
+    });
   };
 
   return (
     <div className="space-y-10 text-black">
-      {errorMsg && (
-        <div className="flex items-center gap-2 p-4 bg-red-100 border-2 border-red-600 rounded-xl text-black font-bold text-sm">
-          <AlertCircle size={18} className="text-red-700 shrink-0" />
-          <span>{errorMsg}</span>
-        </div>
+      {confirmDialog && (
+        <ConfirmModal
+          isOpen={true}
+          open={true}
+          title={confirmDialog.title}
+          message={confirmDialog.message}
+          description={confirmDialog.message}
+          onConfirm={confirmDialog.onConfirm}
+          onCancel={() => setConfirmDialog(null)}
+          onClose={() => setConfirmDialog(null)}
+        />
       )}
 
       {/* SEKCJA 1: UŻYTKOWNICY */}
@@ -226,17 +271,52 @@ export default function UsersView() {
         <div className="bg-white rounded-xl border border-blue-200 overflow-hidden shadow-xs">
           <table className="w-full text-left border-collapse text-sm">
             <thead>
-              <tr className="bg-blue-600 text-white">
-                <th className="p-3.5 font-bold">ID</th>
-                <th className="p-3.5 font-bold">Login</th>
-                <th className="p-3.5 font-bold">Email</th>
-                <th className="p-3.5 font-bold">Rola</th>
-                <th className="p-3.5 font-bold">Status (Kliknij, aby zmienić)</th>
+              <tr className="bg-blue-600 text-white select-none">
+                <th
+                  onClick={() => toggleSort(setUserSort, 'id')}
+                  className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
+                >
+                  <div className="inline-flex items-center gap-1">
+                    ID <ArrowUpDown size={14} />
+                  </div>
+                </th>
+                <th
+                  onClick={() => toggleSort(setUserSort, 'username')}
+                  className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
+                >
+                  <div className="inline-flex items-center gap-1">
+                    Login <ArrowUpDown size={14} />
+                  </div>
+                </th>
+                <th
+                  onClick={() => toggleSort(setUserSort, 'email')}
+                  className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
+                >
+                  <div className="inline-flex items-center gap-1">
+                    Email <ArrowUpDown size={14} />
+                  </div>
+                </th>
+                <th
+                  onClick={() => toggleSort(setUserSort, 'role')}
+                  className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
+                >
+                  <div className="inline-flex items-center gap-1">
+                    Rola <ArrowUpDown size={14} />
+                  </div>
+                </th>
+                <th
+                  onClick={() => toggleSort(setUserSort, 'isActive')}
+                  className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
+                >
+                  <div className="inline-flex items-center gap-1">
+                    Status <ArrowUpDown size={14} />
+                  </div>
+                </th>
                 <th className="p-3.5 font-bold text-right">Akcje</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-blue-100">
-              {users.map((u) => {
+              {sortedUsers.map((u) => {
                 const isEditing = editingUserId === u.id;
                 const effectiveRole = getEffectiveUserRole(u.username, u.role);
 
@@ -283,7 +363,6 @@ export default function UsersView() {
                       <button
                         type="button"
                         onClick={() => handleToggleUserActive(u)}
-                        title="Kliknij, aby przełączyć status konta"
                         className={`px-3.5 py-1.5 rounded-lg text-xs font-extrabold border-2 shadow-xs transition transform active:scale-95 cursor-pointer ${
                           u.isActive
                             ? 'bg-green-400 hover:bg-green-500 border-green-800 text-black'
@@ -319,7 +398,7 @@ export default function UsersView() {
                               <Pencil size={14} /> Edytuj
                             </button>
                             <button
-                              onClick={() => handleDeleteUser(u.id)}
+                              onClick={() => confirmDeleteUser(u)}
                               className="flex items-center gap-1 px-3 py-1.5 bg-white border border-blue-300 hover:bg-red-50 text-black rounded-lg font-bold text-xs cursor-pointer"
                             >
                               <Trash2 size={14} /> Usuń
@@ -336,14 +415,14 @@ export default function UsersView() {
         </div>
       </div>
 
-      {/* SEKCJA 2: KREATOR RÓL (tylko moduły konfiguracyjne) */}
+      {/* SEKCJA 2: KREATOR RÓL */}
       <div className="space-y-4 pt-6 border-t-2 border-blue-200">
         <div className="flex items-center gap-2">
           <Shield size={24} className="text-blue-600" />
           <div>
             <h2 className="text-2xl font-bold text-black">Role i Uprawnienia Panelu Roli</h2>
             <p className="text-xs font-medium text-black">
-              Zakładki Wyszukiwarka, Przetargi oraz Statystyki są dostępne zawsze dla każdej roli.
+              Zakładki Wyszukiwarka, Automatyzacja i Excel, Przetargi oraz Statystyki są dostępne zawsze dla każdej roli.
             </p>
           </div>
         </div>
@@ -399,14 +478,21 @@ export default function UsersView() {
         <div className="bg-white rounded-xl border border-blue-200 overflow-hidden shadow-xs">
           <table className="w-full text-left border-collapse text-sm">
             <thead>
-              <tr className="bg-blue-600 text-white">
-                <th className="p-3.5 font-bold">Nazwa Roli</th>
+              <tr className="bg-blue-600 text-white select-none">
+                <th
+                  onClick={() => toggleSort(setRoleSort, 'name')}
+                  className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
+                >
+                  <div className="inline-flex items-center gap-1">
+                    Nazwa Roli <ArrowUpDown size={14} />
+                  </div>
+                </th>
                 <th className="p-3.5 font-bold">Dostępne sekcje (Kliknij, aby nadać/odebrać)</th>
                 <th className="p-3.5 font-bold text-right">Akcje</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-blue-100">
-              {roles.map((r) => (
+              {sortedRoles.map((r) => (
                 <tr key={r.name} className="hover:bg-blue-50/50">
                   <td className="p-3.5 font-mono font-extrabold text-black">{r.name}</td>
                   <td className="p-3.5">
@@ -433,7 +519,7 @@ export default function UsersView() {
                   <td className="p-3.5 text-right">
                     {!r.isSystem && (
                       <button
-                        onClick={() => handleDeleteRole(r.name)}
+                        onClick={() => confirmDeleteRole(r.name)}
                         className="inline-flex items-center gap-1 px-3 py-1.5 bg-white border border-blue-300 hover:bg-red-50 text-black rounded-lg font-bold text-xs cursor-pointer"
                       >
                         <Trash2 size={14} /> Usuń rolę

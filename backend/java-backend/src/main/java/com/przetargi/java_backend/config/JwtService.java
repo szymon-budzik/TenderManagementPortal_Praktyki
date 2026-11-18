@@ -10,10 +10,13 @@ import org.springframework.stereotype.Service;
 import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
 import java.util.Date;
+import java.util.UUID;
 import java.util.function.Function;
 
 @Service
 public class JwtService {
+
+    private static final String BOOT_ID = UUID.randomUUID().toString();
 
     @Value("${app.jwt.secret}")
     private String secretKey;
@@ -28,12 +31,13 @@ public class JwtService {
 
     public String generateToken(UserDetails userDetails, String role) {
         return Jwts.builder()
-            .subject(userDetails.getUsername())
-            .claim("role", role)
-            .issuedAt(new Date(System.currentTimeMillis()))
-            .expiration(new Date(System.currentTimeMillis() + jwtExpiration))
-            .signWith(getSigningKey())
-            .compact();
+                .subject(userDetails.getUsername())
+                .claim("role", role)
+                .claim("bootId", BOOT_ID)
+                .issuedAt(new Date(System.currentTimeMillis()))
+                .expiration(new Date(System.currentTimeMillis() + jwtExpiration))
+                .signWith(getSigningKey())
+                .compact();
     }
 
     public String extractUsername(String token) {
@@ -41,16 +45,12 @@ public class JwtService {
     }
 
     public boolean isTokenValid(String token, UserDetails userDetails) {
-        final String username = extractUsername(token);
-        return (username.equals(userDetails.getUsername())) && !isTokenExpired(token);
-    }
-
-    private boolean isTokenExpired(String token) {
-        return extractExpiration(token).before(new Date());
-    }
-
-    private Date extractExpiration(String token) {
-        return extractClaim(token, Claims::getExpiration);
+        final Claims claims = extractAllClaims(token);
+        final String username = claims.getSubject();
+        final String tokenBootId = claims.get("bootId", String.class);
+        return username.equals(userDetails.getUsername())
+                && BOOT_ID.equals(tokenBootId)
+                && !claims.getExpiration().before(new Date());
     }
 
     public <T> T extractClaim(String token, Function<Claims, T> claimsResolver) {
@@ -60,9 +60,9 @@ public class JwtService {
 
     private Claims extractAllClaims(String token) {
         return Jwts.parser()
-            .verifyWith(getSigningKey())
-            .build()
-            .parseSignedClaims(token)
-            .getPayload();
+                .verifyWith(getSigningKey())
+                .build()
+                .parseSignedClaims(token)
+                .getPayload();
     }
 }

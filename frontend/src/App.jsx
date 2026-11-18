@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import api from './api';
 import LoginView from './components/LoginView';
 import SearchView from './components/SearchView';
 import AutomationView from './components/AutomationView';
@@ -27,30 +28,105 @@ export default function App() {
     return token ? { token, username, role } : null;
   });
 
-  const [activeTab, setActiveTab] = useState('search');
+  const [verifyingAuth, setVerifyingAuth] = useState(() => Boolean(localStorage.getItem('token')));
+
+  // Zapamiętywanie aktywnej zakładki po odświeżeniu strony (F5)
+  const [activeTab, setActiveTab] = useState(() => {
+    return localStorage.getItem('activeTab') || 'search';
+  });
+
   const [, setTick] = useState(0);
+  const lastKnownRunSignature = useRef(null);
 
-  useEffect(() => {
-    const handleUpdate = () => setTick((t) => t + 1);
-    window.addEventListener('rolesUpdated', handleUpdate);
-    return () => window.removeEventListener('rolesUpdated', handleUpdate);
-  }, []);
-
-  if (!auth) {
-    return <LoginView onLoginSuccess={(data) => setAuth(data)} />;
-  }
-
-  const effectiveRole = getEffectiveUserRole(auth.username, auth.role);
-  const permissions = getRolePermissions(effectiveRole);
+  const handleSelectTab = (tabId) => {
+    setActiveTab(tabId);
+    localStorage.setItem('activeTab', tabId);
+  };
 
   const handleLogout = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('username');
     localStorage.removeItem('role');
     setAuth(null);
+    setVerifyingAuth(false);
   };
 
-  // Zawsze dostępne dla każdej roli (Automatyzacja i Excel bezpośrednio pod Wyszukiwarką)
+  // Weryfikacja tokenu przy starcie aplikacji (np. po uruchomieniu docker compose)
+  useEffect(() => {
+    const verifyTokenOnStart = async () => {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        setVerifyingAuth(false);
+        return;
+      }
+      try {
+        await api.get('/auth/me');
+        setVerifyingAuth(false);
+      } catch {
+        handleLogout();
+      }
+    };
+    verifyTokenOnStart();
+  }, []);
+
+  useEffect(() => {
+    const handleUpdate = () => setTick((t) => t + 1);
+    const handleAuthInvalid = () => handleLogout();
+
+    window.addEventListener('rolesUpdated', handleUpdate);
+    window.addEventListener('authInvalid', handleAuthInvalid);
+    return () => {
+      window.removeEventListener('rolesUpdated', handleUpdate);
+      window.removeEventListener('authInvalid', handleAuthInvalid);
+    };
+  }, []);
+
+  // Globalny detektor wykonania zadań Crona w tle (odświeża raporty, przetargi i statystyki)
+  useEffect(() => {
+    if (!auth || verifyingAuth) return;
+
+    const checkRuns = async () => {
+      try {
+        const res = await api.get('/automation/runs');
+        const runs = res.data || [];
+        const newestId = runs.length > 0 ? runs[0].id : 0;
+        const signature = `${runs.length}:${newestId}`;
+
+        if (
+          lastKnownRunSignature.current !== null &&
+          lastKnownRunSignature.current !== signature
+        ) {
+          window.dispatchEvent(new Event('dataUpdatedByCron'));
+        }
+        lastKnownRunSignature.current = signature;
+      } catch {
+        // Ciche sprawdzenie w tle
+      }
+    };
+
+    checkRuns();
+    const interval = setInterval(checkRuns, 8000);
+    return () => clearInterval(interval);
+  }, [auth, verifyingAuth]);
+
+  if (verifyingAuth) {
+    return null;
+  }
+
+  if (!auth) {
+    return (
+      <LoginView
+        onLoginSuccess={(data) => {
+          setAuth(data);
+          setVerifyingAuth(false);
+        }}
+      />
+    );
+  }
+
+  const effectiveRole = getEffectiveUserRole(auth.username, auth.role);
+  const permissions = getRolePermissions(effectiveRole);
+
   const alwaysAvailableItems = [
     { id: 'search', label: 'Wyszukiwarka', icon: Search },
     { id: 'automation', label: 'Automatyzacja i Excel', icon: FileSpreadsheet },
@@ -84,7 +160,7 @@ export default function App() {
               return (
                 <button
                   key={item.id}
-                  onClick={() => setActiveTab(item.id)}
+                  onClick={() => handleSelectTab(item.id)}
                   className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition cursor-pointer ${
                     isActive
                       ? 'bg-blue-600 text-white shadow-xs'
@@ -108,7 +184,7 @@ export default function App() {
                   return (
                     <button
                       key={item.id}
-                      onClick={() => setActiveTab(item.id)}
+                      onClick={() => handleSelectTab(item.id)}
                       className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition cursor-pointer ${
                         isActive
                           ? 'bg-blue-600 text-white shadow-xs'

@@ -1,11 +1,11 @@
 package com.przetargi.java_backend.controller;
 
 import com.przetargi.java_backend.entity.AutomationProfile;
-import com.przetargi.java_backend.entity.CronConfig;
 import com.przetargi.java_backend.entity.FetchRun;
+import com.przetargi.java_backend.entity.SmtpAccount;
 import com.przetargi.java_backend.repository.AutomationProfileRepository;
-import com.przetargi.java_backend.repository.CronConfigRepository;
 import com.przetargi.java_backend.repository.FetchRunRepository;
+import com.przetargi.java_backend.repository.SmtpAccountRepository;
 import com.przetargi.java_backend.service.TenderExecutionService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -29,19 +29,62 @@ public class AutomationController {
 
     private final TenderExecutionService executionService;
     private final FetchRunRepository fetchRunRepository;
-    private final CronConfigRepository cronConfigRepository;
     private final AutomationProfileRepository profileRepository;
+    private final SmtpAccountRepository smtpAccountRepository;
 
     public AutomationController(
             TenderExecutionService executionService,
             FetchRunRepository fetchRunRepository,
-            CronConfigRepository cronConfigRepository,
-            AutomationProfileRepository profileRepository
+            AutomationProfileRepository profileRepository,
+            SmtpAccountRepository smtpAccountRepository
     ) {
         this.executionService = executionService;
         this.fetchRunRepository = fetchRunRepository;
-        this.cronConfigRepository = cronConfigRepository;
         this.profileRepository = profileRepository;
+        this.smtpAccountRepository = smtpAccountRepository;
+    }
+
+    // --- KONFIGURACJE SERWERÓW SMTP (WIELE KONT) ---
+
+    @GetMapping("/smtp-accounts")
+    public ResponseEntity<List<SmtpAccount>> getSmtpAccounts() {
+        return ResponseEntity.ok(smtpAccountRepository.findAllByOrderByIdAsc());
+    }
+
+    @PostMapping("/smtp-accounts")
+    public ResponseEntity<SmtpAccount> createSmtpAccount(@RequestBody SmtpAccount incoming) {
+        SmtpAccount acc = new SmtpAccount();
+        acc.setName(incoming.getName() != null ? incoming.getName().trim() : "Serwer SMTP");
+        acc.setSmtpHost(incoming.getSmtpHost() != null ? incoming.getSmtpHost().trim() : "");
+        acc.setSmtpPort(incoming.getSmtpPort() != null ? incoming.getSmtpPort() : 587);
+        acc.setSmtpUsername(incoming.getSmtpUsername() != null ? incoming.getSmtpUsername().trim() : "");
+        acc.setSmtpPassword(incoming.getSmtpPassword() != null ? incoming.getSmtpPassword() : "");
+        return ResponseEntity.status(HttpStatus.CREATED).body(smtpAccountRepository.save(acc));
+    }
+
+    @PutMapping("/smtp-accounts/{id}")
+    public ResponseEntity<SmtpAccount> updateSmtpAccount(
+            @PathVariable Long id,
+            @RequestBody SmtpAccount incoming
+    ) {
+        SmtpAccount acc = smtpAccountRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Nie znaleziono konta SMTP o ID: " + id));
+
+        if (incoming.getName() != null) acc.setName(incoming.getName().trim());
+        if (incoming.getSmtpHost() != null) acc.setSmtpHost(incoming.getSmtpHost().trim());
+        if (incoming.getSmtpPort() != null) acc.setSmtpPort(incoming.getSmtpPort());
+        if (incoming.getSmtpUsername() != null) acc.setSmtpUsername(incoming.getSmtpUsername().trim());
+        if (incoming.getSmtpPassword() != null) acc.setSmtpPassword(incoming.getSmtpPassword());
+
+        return ResponseEntity.ok(smtpAccountRepository.save(acc));
+    }
+
+    @DeleteMapping("/smtp-accounts/{id}")
+    public ResponseEntity<Void> deleteSmtpAccount(@PathVariable Long id) {
+        if (smtpAccountRepository.existsById(id)) {
+            smtpAccountRepository.deleteById(id);
+        }
+        return ResponseEntity.noContent().build();
     }
 
     // --- PROFILE AUTOMATYZACJI ---
@@ -59,7 +102,11 @@ public class AutomationController {
         AutomationProfile p = new AutomationProfile();
         p.setName(incoming.getName().trim());
         p.setEnabled(Boolean.TRUE.equals(incoming.getEnabled()));
+        p.setScheduleType(incoming.getScheduleType() != null ? incoming.getScheduleType() : "DAILY");
         p.setCronTime(incoming.getCronTime() != null && !incoming.getCronTime().isBlank() ? incoming.getCronTime().trim() : "08:00");
+        p.setIntervalMinutes(incoming.getIntervalMinutes() != null ? incoming.getIntervalMinutes() : 60);
+        p.setCronDays(incoming.getCronDays() != null ? incoming.getCronDays() : "1,2,3,4,5");
+        p.setSmtpAccountId(incoming.getSmtpAccountId());
         p.setMatchMode(incoming.getMatchMode() != null ? incoming.getMatchMode() : "ANY");
         p.setEndpointIds(incoming.getEndpointIds() != null ? incoming.getEndpointIds() : "");
         p.setCategoryIds(incoming.getCategoryIds() != null ? incoming.getCategoryIds() : "");
@@ -82,9 +129,20 @@ public class AutomationController {
         if (incoming.getEnabled() != null) {
             p.setEnabled(incoming.getEnabled());
         }
+        if (incoming.getScheduleType() != null) {
+            p.setScheduleType(incoming.getScheduleType());
+        }
         if (incoming.getCronTime() != null && !incoming.getCronTime().isBlank()) {
             p.setCronTime(incoming.getCronTime().trim());
         }
+        if (incoming.getIntervalMinutes() != null) {
+            p.setIntervalMinutes(incoming.getIntervalMinutes());
+        }
+        if (incoming.getCronDays() != null) {
+            p.setCronDays(incoming.getCronDays());
+        }
+        p.setSmtpAccountId(incoming.getSmtpAccountId());
+
         if (incoming.getMatchMode() != null) {
             p.setMatchMode(incoming.getMatchMode());
         }
@@ -114,7 +172,7 @@ public class AutomationController {
         return ResponseEntity.ok(executionService.executeProfileNow(id));
     }
 
-    // --- HISTORIA POBRAŃ I KONFIGURACJA SMTP ---
+    // --- HISTORIA POBRAŃ ---
 
     @GetMapping("/runs")
     public ResponseEntity<List<FetchRunDto>> getRuns() {
@@ -143,21 +201,6 @@ public class AutomationController {
         return ResponseEntity.noContent().build();
     }
 
-    @GetMapping("/cron")
-    public ResponseEntity<CronConfig> getSmtpConfig() {
-        return ResponseEntity.ok(executionService.getOrCreateCronConfig());
-    }
-
-    @PutMapping("/cron")
-    public ResponseEntity<CronConfig> updateSmtpConfig(@RequestBody CronConfig incoming) {
-        CronConfig cfg = executionService.getOrCreateCronConfig();
-        cfg.setSmtpHost(incoming.getSmtpHost() != null ? incoming.getSmtpHost().trim() : "");
-        cfg.setSmtpPort(incoming.getSmtpPort() != null ? incoming.getSmtpPort() : 587);
-        cfg.setSmtpUsername(incoming.getSmtpUsername() != null ? incoming.getSmtpUsername().trim() : "");
-        cfg.setSmtpPassword(incoming.getSmtpPassword() != null ? incoming.getSmtpPassword() : "");
-        return ResponseEntity.ok(cronConfigRepository.save(cfg));
-    }
-
     @PostMapping("/runs/export")
     public ResponseEntity<TenderExecutionService.ExcelExportResult> exportRunsToExcel(
             @RequestBody ExportRunsRequest request
@@ -182,7 +225,8 @@ public class AutomationController {
         return ResponseEntity.ok(executionService.sendRunsToEmails(
                 request.runIds(),
                 emails,
-                "Raport przetargow z wybranych pobran"
+                "Raport przetargow z wybranych pobran",
+                request.smtpAccountId()
         ));
     }
 
@@ -193,7 +237,7 @@ public class AutomationController {
 
     public record ErrorMessage(String message) {}
     public record ExportRunsRequest(List<Long> runIds) {}
-    public record SendRunsEmailRequest(List<Long> runIds, String emails) {}
+    public record SendRunsEmailRequest(List<Long> runIds, String emails, Long smtpAccountId) {}
     public record FetchRunDto(
             Long id,
             String sourceType,

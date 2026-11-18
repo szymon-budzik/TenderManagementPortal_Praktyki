@@ -5,6 +5,7 @@ import com.przetargi.java_backend.entity.AutomationProfile;
 import com.przetargi.java_backend.entity.CronConfig;
 import com.przetargi.java_backend.entity.FetchRun;
 import com.przetargi.java_backend.entity.KeywordCategory;
+import com.przetargi.java_backend.entity.SmtpAccount;
 import com.przetargi.java_backend.entity.Tender;
 import com.przetargi.java_backend.entity.enums.TenderStatus;
 import com.przetargi.java_backend.repository.ApiEndpointRepository;
@@ -12,6 +13,7 @@ import com.przetargi.java_backend.repository.AutomationProfileRepository;
 import com.przetargi.java_backend.repository.CronConfigRepository;
 import com.przetargi.java_backend.repository.FetchRunRepository;
 import com.przetargi.java_backend.repository.KeywordCategoryRepository;
+import com.przetargi.java_backend.repository.SmtpAccountRepository;
 import com.przetargi.java_backend.repository.TenderRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.json.JsonParser;
@@ -26,14 +28,15 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.LocalDateTime;
-import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Service
@@ -48,6 +51,7 @@ public class TenderExecutionService {
     private final FetchRunRepository fetchRunRepository;
     private final CronConfigRepository cronConfigRepository;
     private final AutomationProfileRepository profileRepository;
+    private final SmtpAccountRepository smtpAccountRepository;
 
     @Value("${SCRAPER_SERVICE_URL:http://ingestion-worker:8000}")
     private String scraperServiceUrl;
@@ -60,7 +64,8 @@ public class TenderExecutionService {
             TenderRepository tenderRepository,
             FetchRunRepository fetchRunRepository,
             CronConfigRepository cronConfigRepository,
-            AutomationProfileRepository profileRepository
+            AutomationProfileRepository profileRepository,
+            SmtpAccountRepository smtpAccountRepository
     ) {
         this.endpointRepository = endpointRepository;
         this.keywordCategoryRepository = keywordCategoryRepository;
@@ -68,6 +73,7 @@ public class TenderExecutionService {
         this.fetchRunRepository = fetchRunRepository;
         this.cronConfigRepository = cronConfigRepository;
         this.profileRepository = profileRepository;
+        this.smtpAccountRepository = smtpAccountRepository;
     }
 
     public CronConfig getOrCreateCronConfig() {
@@ -78,21 +84,76 @@ public class TenderExecutionService {
         });
     }
 
-    @Scheduled(fixedRate = 20000)
+    @Scheduled(fixedRate = 15000)
     public void checkAndRunScheduledProfiles() {
-        String nowHm = LocalTime.now(POLAND_ZONE).format(DateTimeFormatter.ofPattern("HH:mm"));
+        ZonedDateTime nowPl = ZonedDateTime.now(POLAND_ZONE);
+        String nowHm = nowPl.format(DateTimeFormatter.ofPattern("HH:mm"));
+        String stampKey = nowPl.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
+        int currentDayOfWeek = nowPl.getDayOfWeek().getValue(); // 1 (Pon) - 7 (Nd)
+
         List<AutomationProfile> profiles = profileRepository.findAll();
 
         for (AutomationProfile profile : profiles) {
             if (!Boolean.TRUE.equals(profile.getEnabled())) {
                 continue;
             }
-            String lastMinute = lastTriggeredMinuteByProfile.getOrDefault(profile.getId(), "");
-            if (nowHm.equals(profile.getCronTime()) && !nowHm.equals(lastMinute)) {
-                lastTriggeredMinuteByProfile.put(profile.getId(), nowHm);
-                executeProfileNow(profile.getId());
+
+            String type = profile.getScheduleType() != null
+                    ? profile.getScheduleType().toUpperCase()
+                    : "DAILY";
+
+            if ("INTERVAL".equals(type)) {
+                int intervalMins = profile.getIntervalMinutes() != null && profile.getIntervalMinutes() > 0
+                        ? profile.getIntervalMinutes()
+                        : 60;
+                OffsetDateTime lastRun = profile.getLastRunAt();
+                boolean shouldRun = (lastRun == null)
+                        || Duration.between(lastRun, nowPl.toOffsetDateTime()).toMinutes() >= intervalMins;
+
+                if (shouldRun && !stampKey.equals(lastTriggeredMinuteByProfile.get(profile.getId()))) {
+                    lastTriggeredMinuteByProfile.put(profile.getId(), stampKey);
+                    executeProfileNow(profile.getId());
+                }
+            } else if ("WEEKLY".equals(type)) {
+                List<Integer> allowedDays = parseDayNumbers(profile.getCronDays());
+                if (allowedDays.contains(currentDayOfWeek) && matchesAnyTime(nowHm, profile.getCronTime())) {
+                    if (!stampKey.equals(lastTriggeredMinuteByProfile.get(profile.getId()))) {
+                        lastTriggeredMinuteByProfile.put(profile.getId(), stampKey);
+                        executeProfileNow(profile.getId());
+                    }
+                }
+            } else {
+                // DAILY oraz MULTI_TIME (wiele godzin po przecinku, np. "08:00, 12:00, 16:00")
+                if (matchesAnyTime(nowHm, profile.getCronTime())) {
+                    if (!stampKey.equals(lastTriggeredMinuteByProfile.get(profile.getId()))) {
+                        lastTriggeredMinuteByProfile.put(profile.getId(), stampKey);
+                        executeProfileNow(profile.getId());
+                    }
+                }
             }
         }
+    }
+
+    private boolean matchesAnyTime(String nowHm, String cronTimeRaw) {
+        if (cronTimeRaw == null || cronTimeRaw.isBlank()) return false;
+        for (String part : cronTimeRaw.split("[,;]")) {
+            if (nowHm.equals(part.trim())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private List<Integer> parseDayNumbers(String raw) {
+        List<Integer> days = new ArrayList<>();
+        if (raw == null || raw.isBlank()) return days;
+        for (String part : raw.split(",")) {
+            try {
+                days.add(Integer.parseInt(part.trim()));
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return days;
     }
 
     public ExecutionSummary executeProfileNow(Long profileId) {
@@ -113,7 +174,8 @@ public class TenderExecutionService {
                 EmailDispatchResult mailRes = sendRunsToEmails(
                         List.of(summary.fetchRunId()),
                         emails,
-                        "Raport Cron [" + profile.getName() + "] - Przetargi"
+                        "Raport Cron [" + profile.getName() + "] - Przetargi",
+                        profile.getSmtpAccountId()
                 );
                 statusMsg += " | Email: " + mailRes.message();
             } catch (Exception e) {
@@ -470,10 +532,15 @@ public class TenderExecutionService {
     }
 
     @SuppressWarnings("rawtypes")
-    public EmailDispatchResult sendRunsToEmails(List<Long> runIds, List<String> emails, String subject) throws Exception {
+    public EmailDispatchResult sendRunsToEmails(
+            List<Long> runIds,
+            List<String> emails,
+            String subject,
+            Long smtpAccountId
+    ) throws Exception {
         List<FetchRun> runs = fetchRunRepository.findAllById(runIds);
-        CronConfig cfg = getOrCreateCronConfig();
-        String payloadJson = buildWorkerExcelPayload(runs, emails, subject, cfg);
+        SmtpCredentials creds = resolveSmtpCredentials(smtpAccountId);
+        String payloadJson = buildWorkerExcelPayload(runs, emails, subject, creds);
 
         HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build();
         HttpRequest req = HttpRequest.newBuilder()
@@ -497,11 +564,43 @@ public class TenderExecutionService {
         return new EmailDispatchResult(sent, message, base64, filename);
     }
 
+    private SmtpCredentials resolveSmtpCredentials(Long smtpAccountId) {
+        if (smtpAccountId != null) {
+            Optional<SmtpAccount> found = smtpAccountRepository.findById(smtpAccountId);
+            if (found.isPresent()) {
+                SmtpAccount acc = found.get();
+                return new SmtpCredentials(
+                        acc.getSmtpHost(),
+                        acc.getSmtpPort() != null ? acc.getSmtpPort() : 587,
+                        acc.getSmtpUsername(),
+                        acc.getSmtpPassword()
+                );
+            }
+        }
+        List<SmtpAccount> all = smtpAccountRepository.findAllByOrderByIdAsc();
+        if (!all.isEmpty()) {
+            SmtpAccount first = all.get(0);
+            return new SmtpCredentials(
+                    first.getSmtpHost(),
+                    first.getSmtpPort() != null ? first.getSmtpPort() : 587,
+                    first.getSmtpUsername(),
+                    first.getSmtpPassword()
+            );
+        }
+        CronConfig cfg = getOrCreateCronConfig();
+        return new SmtpCredentials(
+                cfg.getSmtpHost(),
+                cfg.getSmtpPort() != null ? cfg.getSmtpPort() : 587,
+                cfg.getSmtpUsername(),
+                cfg.getSmtpPassword()
+        );
+    }
+
     private String buildWorkerExcelPayload(
             List<FetchRun> runs,
             List<String> emails,
             String subject,
-            CronConfig cfg
+            SmtpCredentials creds
     ) {
         Map<Long, Tender> uniqueTenders = new LinkedHashMap<>();
         Map<Long, String> runLabels = new LinkedHashMap<>();
@@ -545,12 +644,12 @@ public class TenderExecutionService {
             sb.append("]");
             sb.append(",\"subject\":\"").append(escapeJson(subject != null ? subject : "Raport przetargow")).append("\"");
 
-            if (cfg != null) {
+            if (creds != null) {
                 sb.append(",\"smtp\":{")
-                        .append("\"host\":\"").append(escapeJson(cfg.getSmtpHost())).append("\",")
-                        .append("\"port\":").append(cfg.getSmtpPort() != null ? cfg.getSmtpPort() : 587).append(",")
-                        .append("\"username\":\"").append(escapeJson(cfg.getSmtpUsername())).append("\",")
-                        .append("\"password\":\"").append(escapeJson(cfg.getSmtpPassword())).append("\"")
+                        .append("\"host\":\"").append(escapeJson(creds.host())).append("\",")
+                        .append("\"port\":").append(creds.port()).append(",")
+                        .append("\"username\":\"").append(escapeJson(creds.username())).append("\",")
+                        .append("\"password\":\"").append(escapeJson(creds.password())).append("\"")
                         .append("}");
             }
         }
@@ -665,6 +764,7 @@ public class TenderExecutionService {
                 .replace("\n", "\\n");
     }
 
+    public record SmtpCredentials(String host, int port, String username, String password) {}
     public record ParsedKeyword(String word, int weight, boolean excluded) {}
     public record RawItem(String externalId, String title, String description) {}
     public record SourceLog(String sourceName, boolean success, int savedCount, String message) {}
