@@ -28,11 +28,18 @@ public class ApiEndpointService {
 
     @Transactional
     public ApiEndpointDto create(ApiEndpointDto dto) {
+        String method = dto.getHttpMethod() != null ? dto.getHttpMethod().toUpperCase() : "GET";
+        String cleanPayload = "GET".equals(method)
+            ? null
+            : (dto.getPayload() != null && !dto.getPayload().isBlank() ? dto.getPayload().trim() : null);
+        String cleanNotes = (dto.getNotes() != null && !dto.getNotes().isBlank()) ? dto.getNotes().trim() : null;
+
         ApiEndpoint entity = ApiEndpoint.builder()
             .name(dto.getName())
             .url(dto.getUrl())
-            .httpMethod(dto.getHttpMethod() != null ? dto.getHttpMethod().toUpperCase() : "GET")
-            .payload(dto.getPayload())
+            .httpMethod(method)
+            .payload(cleanPayload)
+            .notes(cleanNotes)
             .isActive(dto.getIsActive() != null ? dto.getIsActive() : true)
             .build();
 
@@ -47,7 +54,17 @@ public class ApiEndpointService {
         if (dto.getName() != null) entity.setName(dto.getName());
         if (dto.getUrl() != null) entity.setUrl(dto.getUrl());
         if (dto.getHttpMethod() != null) entity.setHttpMethod(dto.getHttpMethod().toUpperCase());
-        if (dto.getPayload() != null) entity.setPayload(dto.getPayload());
+
+        if ("GET".equalsIgnoreCase(entity.getHttpMethod())) {
+            entity.setPayload(null);
+        } else if (dto.getPayload() != null) {
+            entity.setPayload(dto.getPayload().isBlank() ? null : dto.getPayload().trim());
+        }
+
+        if (dto.getNotes() != null) {
+            entity.setNotes(dto.getNotes().isBlank() ? null : dto.getNotes().trim());
+        }
+
         if (dto.getIsActive() != null) entity.setIsActive(dto.getIsActive());
 
         return ApiEndpointDto.fromEntity(repository.save(entity));

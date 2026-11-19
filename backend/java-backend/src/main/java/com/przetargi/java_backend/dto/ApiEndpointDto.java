@@ -22,6 +22,7 @@ public class ApiEndpointDto {
 
     private String httpMethod;
     private String payload;
+    private String notes;
     private Boolean isActive;
     private OffsetDateTime lastSyncAt;
 
@@ -32,6 +33,7 @@ public class ApiEndpointDto {
             .url(entity.getUrl())
             .httpMethod(entity.getHttpMethod())
             .payload(entity.getPayload())
+            .notes(entity.getNotes())
             .isActive(entity.getIsActive())
             .lastSyncAt(entity.getLastSyncAt())
             .build();

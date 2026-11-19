@@ -1,6 +1,7 @@
 package com.przetargi.java_backend.service;
 
 import com.przetargi.java_backend.entity.ApiEndpoint;
+import com.przetargi.java_backend.entity.AutomationNotification;
 import com.przetargi.java_backend.entity.AutomationProfile;
 import com.przetargi.java_backend.entity.CronConfig;
 import com.przetargi.java_backend.entity.FetchRun;
@@ -9,6 +10,7 @@ import com.przetargi.java_backend.entity.SmtpAccount;
 import com.przetargi.java_backend.entity.Tender;
 import com.przetargi.java_backend.entity.enums.TenderStatus;
 import com.przetargi.java_backend.repository.ApiEndpointRepository;
+import com.przetargi.java_backend.repository.AutomationNotificationRepository;
 import com.przetargi.java_backend.repository.AutomationProfileRepository;
 import com.przetargi.java_backend.repository.CronConfigRepository;
 import com.przetargi.java_backend.repository.FetchRunRepository;
@@ -38,10 +40,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-
 import java.util.regex.Pattern;
-import com.przetargi.java_backend.entity.AutomationNotification;
-import com.przetargi.java_backend.repository.AutomationNotificationRepository;
 
 @Service
 @EnableScheduling
@@ -139,12 +138,6 @@ public class TenderExecutionService {
         }
     }
 
-    /**
-     * Obsługuje reguły rozdzielane przecinkiem:
-     * - "8:00, 16:00"      -> codziennie o 08:00 i 16:00
-     * - "8:00/1"           -> w poniedziałki o 08:00
-     * - "16:00/2;5"        -> we wtorki i piątki o 16:00
-     */
     private boolean matchesScheduleExpression(String rawExpr, String nowHm, int todayDow) {
         if (rawExpr == null || rawExpr.isBlank()) {
             return false;
@@ -514,7 +507,6 @@ public class TenderExecutionService {
         if (text == null || text.isEmpty() || pk.word() == null || pk.word().isEmpty()) {
             return false;
         }
-        // Odmiana końcówek (Wildcard *): jeśli opcja jest włączona i słowo kończy się na '*'
         if (pk.wildcard() && pk.word().endsWith("*")) {
             String stem = pk.word().substring(0, pk.word().length() - 1).trim();
             if (stem.isEmpty()) {
@@ -525,7 +517,6 @@ public class TenderExecutionService {
                     .matcher(text)
                     .find();
         }
-        // Standardowe dokładne dopasowanie słowa/frazy
         String regex = "(?<![\\p{L}\\p{N}_])" + Pattern.quote(pk.word()) + "(?![\\p{L}\\p{N}_])";
         return Pattern.compile(regex, Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE)
                 .matcher(text)
@@ -584,11 +575,23 @@ public class TenderExecutionService {
         HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build();
         JsonParser parser = JsonParserFactory.getJsonParser();
         List<RawItem> items = callPythonScraper(client, parser, ep);
-        return "Web Scraper (BeautifulSoup + Pandas) polaczyl sie pomyslnie! Wykryto "
-                + items.size() + " pozycji na stronie (bez zapisywania do bazy).";
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("Web Scraper połączył się pomyślnie! Wykryto ")
+                .append(items.size())
+                .append(" pozycji na stronie (bez zapisywania do bazy).");
+
+        if (!items.isEmpty()) {
+            sb.append("\n\n--- Przykładowe wyłapane pozycje (pierwsze ")
+                    .append(Math.min(5, items.size()))
+                    .append(") ---");
+            for (int i = 0; i < Math.min(5, items.size()); i++) {
+                sb.append("\n").append(i + 1).append(". ").append(items.get(i).title());
+            }
+        }
+        return sb.toString();
     }
 
-    @SuppressWarnings("rawtypes")
     private List<RawItem> callPythonScraper(HttpClient client, JsonParser parser, ApiEndpoint ep) throws Exception {
         String selector = ep.getPayload() != null ? ep.getPayload().trim() : "";
         String reqJson = "{\"url\":\"" + escapeJson(ep.getUrl()) + "\",\"selector\":\"" + escapeJson(selector) + "\"}";
@@ -605,12 +608,12 @@ public class TenderExecutionService {
             throw new IllegalArgumentException("Blad scrapera HTTP " + resp.statusCode() + ": " + resp.body());
         }
 
-        Map root = parser.parseMap(resp.body());
+        Map<String, Object> root = parser.parseMap(resp.body());
         List<RawItem> result = new ArrayList<>();
         Object itemsObj = root.get("items");
-        if (itemsObj instanceof List listObj) {
+        if (itemsObj instanceof List<?> listObj) {
             for (Object o : listObj) {
-                if (o instanceof Map m) {
+                if (o instanceof Map<?, ?> m) {
                     String extId = firstNonNullString(m, "externalId", "id");
                     String title = firstNonNullString(m, "title", "name");
                     String desc = firstNonNullString(m, "description");
@@ -627,52 +630,27 @@ public class TenderExecutionService {
             JsonParser parser,
             ApiEndpoint ep
     ) throws Exception {
-        int maxPages = 1;
-        if ("GET".equalsIgnoreCase(ep.getHttpMethod()) && ep.getPayload() != null) {
-            String p = ep.getPayload().trim().toLowerCase();
-            if (p.startsWith("pages=")) {
-                try {
-                    maxPages = Math.max(1, Math.min(10, Integer.parseInt(p.substring(6).trim())));
-                } catch (NumberFormatException ignored) {
-                }
-            }
+        HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
+                .uri(URI.create(ep.getUrl()))
+                .timeout(Duration.ofSeconds(15))
+                .header("Accept", "application/json")
+                .header("User-Agent", "TenderSearchEngine/1.0");
+
+        if ("POST".equalsIgnoreCase(ep.getHttpMethod())) {
+            String payload = (ep.getPayload() != null && !ep.getPayload().isBlank()) ? ep.getPayload() : "{}";
+            reqBuilder.header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(payload));
+        } else {
+            reqBuilder.GET();
         }
 
-        List<RawItem> allItems = new ArrayList<>();
-        for (int page = 1; page <= maxPages; page++) {
-            String targetUrl = ep.getUrl();
-            if (maxPages > 1 && !targetUrl.contains("PageNumber=")) {
-                targetUrl += (targetUrl.contains("?") ? "&" : "?") + "PageNumber=" + page;
-            }
-
-            HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
-                    .uri(URI.create(targetUrl))
-                    .timeout(Duration.ofSeconds(15))
-                    .header("Accept", "application/json")
-                    .header("User-Agent", "TenderSearchEngine/1.0");
-
-            if ("POST".equalsIgnoreCase(ep.getHttpMethod())) {
-                String payload = (ep.getPayload() != null && !ep.getPayload().isBlank()) ? ep.getPayload() : "{}";
-                reqBuilder.header("Content-Type", "application/json")
-                        .POST(HttpRequest.BodyPublishers.ofString(payload));
-            } else {
-                reqBuilder.GET();
-            }
-
-            HttpResponse<String> response = client.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw new IllegalArgumentException("Blad HTTP " + response.statusCode());
-            }
-            List<RawItem> pageItems = extractItems(parser, response.body(), ep.getName());
-            allItems.addAll(pageItems);
-            if (pageItems.isEmpty()) {
-                break;
-            }
+        HttpResponse<String> response = client.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            throw new IllegalArgumentException("Błąd HTTP " + response.statusCode());
         }
-        return allItems;
+        return extractItems(parser, response.body(), ep.getName());
     }
 
-    @SuppressWarnings("rawtypes")
     public ExcelExportResult generateExcelForRuns(List<Long> runIds) throws Exception {
         List<FetchRun> runs = fetchRunRepository.findAllById(runIds);
         String payloadJson = buildWorkerExcelPayload(runs, null, null, null);
@@ -690,7 +668,7 @@ public class TenderExecutionService {
             throw new IllegalArgumentException("Blad generowania pliku Excel: " + resp.body());
         }
 
-        Map map = JsonParserFactory.getJsonParser().parseMap(resp.body());
+        Map<String, Object> map = JsonParserFactory.getJsonParser().parseMap(resp.body());
         String defaultName = "raport_przetargi_"
                 + LocalDateTime.now(POLAND_ZONE).format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm"))
                 + ".xlsx";
@@ -704,7 +682,6 @@ public class TenderExecutionService {
         return sendRunsToEmails(runIds, emails, subject, null);
     }
 
-    @SuppressWarnings("rawtypes")
     public EmailDispatchResult sendRunsToEmails(
             List<Long> runIds,
             List<String> emails,
@@ -729,7 +706,7 @@ public class TenderExecutionService {
                 .build();
 
         HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());
-        Map map = JsonParserFactory.getJsonParser().parseMap(resp.body());
+        Map<String, Object> map = JsonParserFactory.getJsonParser().parseMap(resp.body());
         if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
             String detail = map.get("detail") != null ? String.valueOf(map.get("detail")) : resp.body();
             throw new IllegalArgumentException(detail);
@@ -833,7 +810,8 @@ public class TenderExecutionService {
         return 587;
     }
 
-    @SuppressWarnings("rawtypes")
+    private record JsonRecord(Map<?, ?> fields) {}
+
     private List<RawItem> extractItems(JsonParser parser, String body, String sourceName) {
         if (body == null || body.isBlank()) {
             return List.of();
@@ -842,75 +820,263 @@ public class TenderExecutionService {
         List<RawItem> result = new ArrayList<>();
 
         if (trimmed.startsWith("[")) {
-            List<Object> parsedList = parser.parseList(trimmed);
+            var parsedList = parser.parseList(trimmed);
             for (Object obj : parsedList) {
-                if (obj instanceof Map mapObj) {
+                if (obj instanceof Map<?, ?> mapObj) {
                     result.add(toRawItem(mapObj, sourceName));
                 }
             }
         } else if (trimmed.startsWith("{")) {
-            Map root = parser.parseMap(trimmed);
-            for (String key : List.of("items", "content", "results", "data", "notices")) {
-                Object candidate = root.get(key);
-                if (candidate instanceof List listObj) {
-                    for (Object obj : listObj) {
-                        if (obj instanceof Map mapObj) {
-                            result.add(toRawItem(mapObj, sourceName));
-                        }
-                    }
-                    break;
+            var root = parser.parseMap(trimmed);
+            List<JsonRecord> itemsList = findBestObjectList(root, 0);
+            if (!itemsList.isEmpty()) {
+                for (JsonRecord item : itemsList) {
+                    result.add(toRawItem(item.fields(), sourceName));
                 }
+            } else if (!root.isEmpty()) {
+                result.add(toRawItem(root, sourceName));
             }
         }
         return result;
     }
 
-    @SuppressWarnings("rawtypes")
-    private RawItem toRawItem(Map map, String sourceName) {
-        String extId = firstNonNullString(map, "objectId", "noticeNumber", "bzpNumber", "id", "externalId", "publication-number");
-        String title = firstNonNullString(map, "orderObject", "title", "name", "subject", "BT-21-Procedure");
-        String purchaser = firstNonNullString(map, "organizationName", "purchaserName", "buyerName", "client", "organisation-name-buyer");
-        String city = firstNonNullString(map, "organizationCity", "city", "location");
-        String province = firstNonNullString(map, "organizationProvince", "province", "region");
-        String noticeNo = firstNonNullString(map, "noticeNumber", "bzpNumber", "referenceNumber");
-        String noticeType = firstNonNullString(map, "noticeType", "procedureType", "orderType");
-        String cpv = firstNonNullString(map, "cpvCode", "cpv", "mainCpv");
-        String deadline = firstNonNullString(map, "submittingOffersDate", "deadline", "submissionDeadline");
-        String rawDesc = firstNonNullString(map, "shortDescription", "description", "summary", "BT-24-Procedure");
+    private List<JsonRecord> findBestObjectList(Map<?, ?> map, int depth) {
+        if (map == null || depth > 4) {
+            return List.of();
+        }
+        List<JsonRecord> bestList = List.of();
 
-        // Wyciąganie lub budowanie bezpośredniego linku do przetargu
-        String tenderLink = firstNonNullString(map, "url", "link", "tenderUrl", "noticeUrl", "htmlUrl", "offerUrl");
-        if (tenderLink == null) {
-            String objectId = firstNonNullString(map, "objectId");
-            String pubNo = firstNonNullString(map, "publication-number");
-            if (objectId != null) {
-                tenderLink = "https://ezamowienia.gov.pl/mp-client/search/list/" + objectId.trim();
-            } else if (pubNo != null) {
-                tenderLink = "https://ted.europa.eu/pl/notice/-/detail/" + pubNo.trim();
+        for (Object value : map.values()) {
+            if (value instanceof List<?> listObj && !listObj.isEmpty()) {
+                List<JsonRecord> mapElements = new ArrayList<>();
+                for (Object elem : listObj) {
+                    if (elem instanceof Map<?, ?> m) {
+                        mapElements.add(new JsonRecord(m));
+                    }
+                }
+                if (mapElements.size() > bestList.size()) {
+                    bestList = mapElements;
+                }
+            } else if (value instanceof Map<?, ?> nestedMap) {
+                List<JsonRecord> nestedResult = findBestObjectList(nestedMap, depth + 1);
+                if (nestedResult.size() > bestList.size()) {
+                    bestList = nestedResult;
+                }
             }
         }
+        return bestList;
+    }
+
+    private RawItem toRawItem(Map<?, ?> rawMap, String sourceName) {
+        Map<String, String> flatFields = new LinkedHashMap<>();
+        flattenMap(rawMap, "", flatFields, 0);
+
+        String extId = extractGenericId(flatFields);
+        String title = extractGenericTitle(flatFields);
+        String tenderLink = extractGenericLink(flatFields);
 
         StringBuilder details = new StringBuilder();
         details.append("Źródło: ").append(sourceName).append("\n");
-        if (tenderLink != null) details.append("Link: ").append(tenderLink).append("\n");
-        if (purchaser != null) details.append("Zamawiający: ").append(purchaser).append("\n");
-        if (city != null || province != null) {
-            details.append("Lokalizacja: ")
-                    .append(city != null ? city : "")
-                    .append(province != null ? " (" + province + ")" : "")
-                    .append("\n");
+        if (tenderLink != null) {
+            details.append("Link: ").append(tenderLink).append("\n");
         }
-        if (noticeNo != null) details.append("Numer ogłoszenia: ").append(noticeNo).append("\n");
-        if (noticeType != null) details.append("Typ ogłoszenia: ").append(noticeType).append("\n");
-        if (cpv != null) details.append("Kody CPV: ").append(cpv).append("\n");
-        if (deadline != null) details.append("Termin składania ofert: ").append(deadline).append("\n");
-        if (rawDesc != null) details.append("Opis: ").append(rawDesc).append("\n");
+
+        int addedFields = 0;
+        for (Map.Entry<String, String> entry : flatFields.entrySet()) {
+            if (addedFields >= 30) {
+                break;
+            }
+            String key = entry.getKey();
+            String val = entry.getValue();
+            if (val == null || val.isBlank() || val.equals(tenderLink)) {
+                continue;
+            }
+            String cleanVal = stripHtml(val);
+            if (cleanVal.isEmpty()) {
+                continue;
+            }
+            if (cleanVal.length() > 500) {
+                cleanVal = cleanVal.substring(0, 500) + "...";
+            }
+            details.append(key).append(": ").append(cleanVal).append("\n");
+            addedFields++;
+        }
 
         return new RawItem(extId, title, details.toString().trim());
     }
 
-    @SuppressWarnings("rawtypes")
-    private String firstNonNullString(Map map, String... keys) {
+    private void flattenMap(Map<?, ?> map, String prefix, Map<String, String> out, int depth) {
+        if (map == null || depth > 4 || out.size() >= 60) {
+            return;
+        }
+        for (Map.Entry<?, ?> entry : map.entrySet()) {
+            if (out.size() >= 60) {
+                return;
+            }
+            String key = String.valueOf(entry.getKey()).trim();
+            Object val = entry.getValue();
+            if (val == null) {
+                continue;
+            }
+            String path = prefix.isEmpty() ? key : prefix + "." + key;
+
+            if (val instanceof Map<?, ?> nestedMap) {
+                flattenMap(nestedMap, path, out, depth + 1);
+            } else if (val instanceof List<?> listObj) {
+                List<String> primitives = new ArrayList<>();
+                int nestedMapIdx = 0;
+                for (Object elem : listObj) {
+                    if (elem == null) {
+                        continue;
+                    }
+                    if (elem instanceof Map<?, ?> elemMap) {
+                        if (nestedMapIdx < 3) {
+                            flattenMap(elemMap, path + "[" + nestedMapIdx + "]", out, depth + 1);
+                            nestedMapIdx++;
+                        }
+                    } else {
+                        String s = String.valueOf(elem).trim();
+                        if (!s.isEmpty() && primitives.size() < 10) {
+                            primitives.add(s);
+                        }
+                    }
+                }
+                if (!primitives.isEmpty()) {
+                    out.put(path, String.join(", ", primitives));
+                }
+            } else {
+                String str = String.valueOf(val).trim();
+                if (!str.isEmpty() && !"null".equalsIgnoreCase(str)) {
+                    out.put(path, str);
+                }
+            }
+        }
+    }
+
+    private String extractGenericId(Map<String, String> flat) {
+        List<String> exactKeys = List.of("id", "externalid", "uuid", "guid", "code", "number", "identifier", "ref");
+        for (String target : exactKeys) {
+            for (Map.Entry<String, String> e : flat.entrySet()) {
+                String leaf = extractLeafKey(e.getKey());
+                String val = e.getValue();
+                if (leaf.equals(target) && isValidIdCandidate(val)) {
+                    return val.trim();
+                }
+            }
+        }
+        for (Map.Entry<String, String> e : flat.entrySet()) {
+            String leaf = extractLeafKey(e.getKey());
+            String val = e.getValue();
+            if ((leaf.endsWith("id") || leaf.endsWith("number")) && isValidIdCandidate(val)) {
+                return val.trim();
+            }
+        }
+        return null;
+    }
+
+    private String extractGenericTitle(Map<String, String> flat) {
+        List<String> primaryKeys = List.of("title", "subject", "headline", "summary");
+        for (String target : primaryKeys) {
+            for (Map.Entry<String, String> e : flat.entrySet()) {
+                if (extractLeafKey(e.getKey()).equals(target)) {
+                    String cleaned = stripHtml(e.getValue());
+                    if (!cleaned.isEmpty() && !isUrl(cleaned)) {
+                        return truncateTitle(cleaned);
+                    }
+                }
+            }
+        }
+
+        for (Map.Entry<String, String> e : flat.entrySet()) {
+            String fullLower = e.getKey().toLowerCase();
+            String leaf = extractLeafKey(e.getKey());
+            if (leaf.endsWith("id") || leaf.endsWith("url") || leaf.endsWith("link") || leaf.endsWith("code")) {
+                continue;
+            }
+            if (fullLower.contains("title") || fullLower.contains("subject")
+                    || fullLower.contains("headline") || fullLower.contains("object")) {
+                String cleaned = stripHtml(e.getValue());
+                if (cleaned.length() >= 3 && !isUrl(cleaned)) {
+                    return truncateTitle(cleaned);
+                }
+            }
+        }
+
+        for (Map.Entry<String, String> e : flat.entrySet()) {
+            if (extractLeafKey(e.getKey()).equals("name") && !e.getKey().contains("[")) {
+                String cleaned = stripHtml(e.getValue());
+                if (cleaned.length() >= 3 && !isUrl(cleaned)) {
+                    return truncateTitle(cleaned);
+                }
+            }
+        }
+
+        String bestText = null;
+        for (String rawVal : flat.values()) {
+            String cleaned = stripHtml(rawVal);
+            if (cleaned.length() < 8 || isUrl(cleaned)
+                    || "true".equalsIgnoreCase(cleaned) || "false".equalsIgnoreCase(cleaned)) {
+                continue;
+            }
+            if (bestText == null || cleaned.length() > bestText.length()) {
+                bestText = cleaned;
+            }
+        }
+        return bestText != null ? truncateTitle(bestText) : null;
+    }
+
+    private String extractGenericLink(Map<String, String> flat) {
+        for (Map.Entry<String, String> e : flat.entrySet()) {
+            String keyLower = e.getKey().toLowerCase();
+            String val = e.getValue().trim();
+            if (isUrl(val) && (keyLower.contains("url") || keyLower.contains("link")
+                    || keyLower.contains("href") || keyLower.contains("web")
+                    || keyLower.contains("html") || keyLower.contains("self"))) {
+                return val;
+            }
+        }
+        for (String val : flat.values()) {
+            String trimmed = val.trim();
+            if (isUrl(trimmed)) {
+                return trimmed;
+            }
+        }
+        return null;
+    }
+
+    private String extractLeafKey(String path) {
+        if (path == null) return "";
+        int dot = path.lastIndexOf('.');
+        String leaf = dot >= 0 ? path.substring(dot + 1) : path;
+        int bracket = leaf.indexOf('[');
+        if (bracket >= 0) {
+            leaf = leaf.substring(0, bracket);
+        }
+        return leaf.trim().toLowerCase();
+    }
+
+    private boolean isValidIdCandidate(String val) {
+        if (val == null) return false;
+        String t = val.trim();
+        return !t.isEmpty() && t.length() <= 100 && !isUrl(t);
+    }
+
+    private boolean isUrl(String val) {
+        if (val == null) return false;
+        String lower = val.trim().toLowerCase();
+        return (lower.startsWith("http://") || lower.startsWith("https://")) && !lower.contains(" ");
+    }
+
+    private String stripHtml(String raw) {
+        if (raw == null) return "";
+        return raw.replaceAll("<[^>]+>", " ").replaceAll("\\s+", " ").trim();
+    }
+
+    private String truncateTitle(String text) {
+        return text.length() > 260 ? text.substring(0, 260) + "..." : text;
+    }
+
+    private String firstNonNullString(Map<?, ?> map, String... keys) {
         for (String key : keys) {
             Object val = map.get(key);
             if (val != null && !val.toString().isBlank()) {

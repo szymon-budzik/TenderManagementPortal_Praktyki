@@ -30,6 +30,9 @@ public class ApiEndpoint {
     @Column(columnDefinition = "TEXT")
     private String payload;
 
+    @Column(columnDefinition = "TEXT")
+    private String notes;
+
     @Column(name = "is_active", nullable = false)
     private Boolean isActive;
 

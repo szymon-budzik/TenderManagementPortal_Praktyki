@@ -61,9 +61,6 @@ function getTenderLink(tender) {
       return urlMatch[0];
     }
   }
-  if (tender?.externalId && tender.externalId.startsWith('ocds-')) {
-    return `https://ezamowienia.gov.pl/mp-client/search/list/${tender.externalId}`;
-  }
   return null;
 }
 

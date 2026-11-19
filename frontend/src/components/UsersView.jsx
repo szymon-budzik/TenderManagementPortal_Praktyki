@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import api from '../api';
 import ConfirmModal from './ConfirmModal';
-import { Trash2, Plus, Pencil, Check, X, Shield, ArrowUpDown } from 'lucide-react';
+import { Trash2, Plus, Pencil, Check, X, Shield, ArrowUpDown, Lock } from 'lucide-react';
 import {
   CONFIGURABLE_PERMISSIONS,
   getRoles,
@@ -12,6 +12,8 @@ import {
 } from '../rolesStore';
 
 export default function UsersView() {
+  const currentUsername = (localStorage.getItem('username') || '').toLowerCase();
+
   const [users, setUsers] = useState([]);
   const [roles, setRoles] = useState(() => getRoles());
   const [userSort, setUserSort] = useState({ key: 'id', dir: 'asc' });
@@ -44,6 +46,12 @@ export default function UsersView() {
   useEffect(() => {
     fetchUsers();
   }, []);
+
+  const isProtectedAdminUser = (u) => {
+    if (!u?.username) return false;
+    const uname = u.username.toLowerCase();
+    return uname === 'admin' || uname === currentUsername;
+  };
 
   const toggleSort = (setter, key) => {
     setter((prev) => ({
@@ -98,6 +106,8 @@ export default function UsersView() {
   };
 
   const handleToggleExistingRolePerm = (roleName, permId) => {
+    if (roleName === 'ROLE_ADMIN') return;
+
     const updated = roles.map((r) => {
       if (r.name !== roleName) return r;
       const hasPerm = r.permissions.includes(permId);
@@ -142,6 +152,7 @@ export default function UsersView() {
   };
 
   const handleToggleUserActive = async (user) => {
+    if (isProtectedAdminUser(user)) return;
     try {
       await api.patch(`/admin/users/${user.id}`, { isActive: !user.isActive });
       fetchUsers();
@@ -159,14 +170,18 @@ export default function UsersView() {
     });
   };
 
-  const saveEditUser = async (id) => {
+  const saveEditUser = async (id, user) => {
     try {
-      const backendRole = mapToBackendRole(editUserForm.role);
+      const protectedUser = isProtectedAdminUser(user);
+      const targetRole = protectedUser ? 'ROLE_ADMIN' : editUserForm.role;
+      const backendRole = mapToBackendRole(targetRole);
       await api.patch(`/admin/users/${id}`, {
         email: editUserForm.email.trim(),
         role: backendRole,
       });
-      setUserCustomRole(editUserForm.username, editUserForm.role);
+      if (!protectedUser) {
+        setUserCustomRole(editUserForm.username, targetRole);
+      }
       setEditingUserId(null);
       fetchUsers();
     } catch (err) {
@@ -175,6 +190,7 @@ export default function UsersView() {
   };
 
   const confirmDeleteUser = (u) => {
+    if (isProtectedAdminUser(u)) return;
     setConfirmDialog({
       title: 'Usuń użytkownika',
       message: `Czy na pewno chcesz usunąć konto użytkownika "${u.username}"?`,
@@ -274,7 +290,7 @@ export default function UsersView() {
               <tr className="bg-blue-600 text-white select-none">
                 <th
                   onClick={() => toggleSort(setUserSort, 'id')}
-                  className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
+                  className="p-3.5 font-bold w-16 cursor-pointer hover:bg-blue-700"
                 >
                   <div className="inline-flex items-center gap-1">
                     ID <ArrowUpDown size={14} />
@@ -298,7 +314,7 @@ export default function UsersView() {
                 </th>
                 <th
                   onClick={() => toggleSort(setUserSort, 'role')}
-                  className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
+                  className="p-3.5 font-bold w-44 cursor-pointer hover:bg-blue-700"
                 >
                   <div className="inline-flex items-center gap-1">
                     Rola <ArrowUpDown size={14} />
@@ -306,24 +322,36 @@ export default function UsersView() {
                 </th>
                 <th
                   onClick={() => toggleSort(setUserSort, 'isActive')}
-                  className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
+                  className="p-3.5 font-bold w-40 cursor-pointer hover:bg-blue-700 whitespace-nowrap"
                 >
                   <div className="inline-flex items-center gap-1">
                     Status <ArrowUpDown size={14} />
                   </div>
                 </th>
-                <th className="p-3.5 font-bold text-right">Akcje</th>
+                <th className="p-3.5 font-bold w-48 text-right whitespace-nowrap">Akcje</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-blue-100">
               {sortedUsers.map((u) => {
                 const isEditing = editingUserId === u.id;
                 const effectiveRole = getEffectiveUserRole(u.username, u.role);
+                const protectedAdmin = isProtectedAdminUser(u);
 
                 return (
                   <tr key={u.id} className="hover:bg-blue-50/50">
                     <td className="p-3.5 font-bold">{u.id}</td>
-                    <td className="p-3.5 font-semibold">{u.username}</td>
+                    <td className="p-3.5 font-semibold">
+                      <div className="inline-flex items-center gap-1.5">
+                        <span>{u.username}</span>
+                        {protectedAdmin && (
+                          <Lock
+                            size={13}
+                            className="text-blue-700"
+                            title="Chronione konto administratora"
+                          />
+                        )}
+                      </div>
+                    </td>
                     <td className="p-3.5">
                       {isEditing ? (
                         <input
@@ -339,7 +367,7 @@ export default function UsersView() {
                       )}
                     </td>
                     <td className="p-3.5 font-mono font-bold">
-                      {isEditing ? (
+                      {isEditing && !protectedAdmin ? (
                         <select
                           value={editUserForm.role}
                           onChange={(e) =>
@@ -359,25 +387,33 @@ export default function UsersView() {
                         </span>
                       )}
                     </td>
-                    <td className="p-3.5">
+                    <td className="p-3.5 whitespace-nowrap">
                       <button
                         type="button"
+                        disabled={protectedAdmin}
                         onClick={() => handleToggleUserActive(u)}
-                        className={`px-3.5 py-1.5 rounded-lg text-xs font-extrabold border-2 shadow-xs transition transform active:scale-95 cursor-pointer ${
-                          u.isActive
-                            ? 'bg-green-400 hover:bg-green-500 border-green-800 text-black'
-                            : 'bg-red-400 hover:bg-red-500 border-red-800 text-black'
+                        title={
+                          protectedAdmin
+                            ? 'Nie można zablokować konta administratora'
+                            : 'Kliknij, aby zmienić status konta'
+                        }
+                        className={`w-32 py-1.5 text-center rounded-lg text-xs font-extrabold border-2 shadow-xs transition ${
+                          protectedAdmin
+                            ? 'bg-green-300 border-green-800 text-black opacity-85 cursor-not-allowed'
+                            : u.isActive
+                            ? 'bg-green-400 hover:bg-green-500 border-green-800 text-black cursor-pointer active:scale-95'
+                            : 'bg-red-400 hover:bg-red-500 border-red-800 text-black cursor-pointer active:scale-95'
                         }`}
                       >
                         {u.isActive ? 'AKTYWNY' : 'ZABLOKOWANY'}
                       </button>
                     </td>
-                    <td className="p-3.5 text-right">
+                    <td className="p-3.5 text-right whitespace-nowrap">
                       <div className="flex items-center justify-end gap-2">
                         {isEditing ? (
                           <>
                             <button
-                              onClick={() => saveEditUser(u.id)}
+                              onClick={() => saveEditUser(u.id, u)}
                               className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold text-xs cursor-pointer"
                             >
                               <Check size={14} /> Zapisz
@@ -397,12 +433,14 @@ export default function UsersView() {
                             >
                               <Pencil size={14} /> Edytuj
                             </button>
-                            <button
-                              onClick={() => confirmDeleteUser(u)}
-                              className="flex items-center gap-1 px-3 py-1.5 bg-white border border-blue-300 hover:bg-red-50 text-black rounded-lg font-bold text-xs cursor-pointer"
-                            >
-                              <Trash2 size={14} /> Usuń
-                            </button>
+                            {!protectedAdmin && (
+                              <button
+                                onClick={() => confirmDeleteUser(u)}
+                                className="flex items-center gap-1 px-3 py-1.5 bg-white border border-blue-300 hover:bg-red-50 text-black rounded-lg font-bold text-xs cursor-pointer"
+                              >
+                                <Trash2 size={14} /> Usuń
+                              </button>
+                            )}
                           </>
                         )}
                       </div>
@@ -422,7 +460,7 @@ export default function UsersView() {
           <div>
             <h2 className="text-2xl font-bold text-black">Role i Uprawnienia Panelu Roli</h2>
             <p className="text-xs font-medium text-black">
-              Zakładki Wyszukiwarka, Automatyzacja i Excel, Przetargi oraz Statystyki są dostępne zawsze dla każdej roli.
+              Zakładki Wyszukiwarka, Automatyzacja, Raporty, Przetargi oraz Statystyki są dostępne zawsze dla każdej roli. Rola ROLE_ADMIN zawsze zachowuje pełne uprawnienia.
             </p>
           </div>
         </div>
@@ -492,42 +530,64 @@ export default function UsersView() {
               </tr>
             </thead>
             <tbody className="divide-y divide-blue-100">
-              {sortedRoles.map((r) => (
-                <tr key={r.name} className="hover:bg-blue-50/50">
-                  <td className="p-3.5 font-mono font-extrabold text-black">{r.name}</td>
-                  <td className="p-3.5">
-                    <div className="flex flex-wrap gap-2">
-                      {CONFIGURABLE_PERMISSIONS.map((perm) => {
-                        const active = r.permissions.includes(perm.id);
-                        return (
-                          <button
-                            key={perm.id}
-                            type="button"
-                            onClick={() => handleToggleExistingRolePerm(r.name, perm.id)}
-                            className={`px-3 py-1 rounded-lg text-xs font-extrabold border-2 transition cursor-pointer ${
-                              active
-                                ? 'bg-green-400 hover:bg-green-500 border-green-800 text-black'
-                                : 'bg-red-300 hover:bg-red-400 border-red-700 text-black opacity-80'
-                            }`}
-                          >
-                            {perm.label}: {active ? 'TAK' : 'NIE'}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </td>
-                  <td className="p-3.5 text-right">
-                    {!r.isSystem && (
-                      <button
-                        onClick={() => confirmDeleteRole(r.name)}
-                        className="inline-flex items-center gap-1 px-3 py-1.5 bg-white border border-blue-300 hover:bg-red-50 text-black rounded-lg font-bold text-xs cursor-pointer"
-                      >
-                        <Trash2 size={14} /> Usuń rolę
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
+              {sortedRoles.map((r) => {
+                const isAdminRole = r.name === 'ROLE_ADMIN';
+                return (
+                  <tr key={r.name} className="hover:bg-blue-50/50">
+                    <td className="p-3.5 font-mono font-extrabold text-black">
+                      <div className="inline-flex items-center gap-1.5">
+                        <span>{r.name}</span>
+                        {isAdminRole && (
+                          <Lock
+                            size={13}
+                            className="text-blue-700"
+                            title="ROLE_ADMIN posiada pełne, niezmienne uprawnienia"
+                          />
+                        )}
+                      </div>
+                    </td>
+                    <td className="p-3.5">
+                      <div className="flex flex-wrap gap-2">
+                        {CONFIGURABLE_PERMISSIONS.map((perm) => {
+                          const active = isAdminRole || r.permissions.includes(perm.id);
+                          return (
+                            <button
+                              key={perm.id}
+                              type="button"
+                              disabled={isAdminRole}
+                              onClick={() => handleToggleExistingRolePerm(r.name, perm.id)}
+                              title={
+                                isAdminRole
+                                  ? 'ROLE_ADMIN ma stały dostęp do wszystkich sekcji'
+                                  : 'Kliknij, aby zmienić uprawnienie'
+                              }
+                              className={`px-3 py-1 rounded-lg text-xs font-extrabold border-2 transition ${
+                                isAdminRole
+                                  ? 'bg-green-300 border-green-800 text-black opacity-85 cursor-not-allowed'
+                                  : active
+                                  ? 'bg-green-400 hover:bg-green-500 border-green-800 text-black cursor-pointer'
+                                  : 'bg-red-300 hover:bg-red-400 border-red-700 text-black opacity-80 cursor-pointer'
+                              }`}
+                            >
+                              {perm.label}: {active ? 'TAK' : 'NIE'}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </td>
+                    <td className="p-3.5 text-right">
+                      {!r.isSystem && (
+                        <button
+                          onClick={() => confirmDeleteRole(r.name)}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 bg-white border border-blue-300 hover:bg-red-50 text-black rounded-lg font-bold text-xs cursor-pointer"
+                        >
+                          <Trash2 size={14} /> Usuń rolę
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

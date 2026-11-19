@@ -11,6 +11,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.security.core.Authentication;
 
 import java.util.List;
 
@@ -59,17 +60,29 @@ public class AdminUserController {
 
     @PatchMapping("/{id}")
     public ResponseEntity<UserResponse> updateUser(@PathVariable Long id,
-                                                   @RequestBody UpdateUserDto req) {
+                                                   @RequestBody UpdateUserDto req,
+                                                   Authentication authentication) {
         User user = userRepository.findById(id)
             .orElseThrow(() -> new IllegalArgumentException("Nie znaleziono użytkownika o ID: " + id));
+
+        String currentUsername = authentication != null ? authentication.getName() : null;
+        boolean isRootAdmin = "admin".equalsIgnoreCase(user.getUsername());
+        boolean isSelf = currentUsername != null && currentUsername.equalsIgnoreCase(user.getUsername());
 
         if (req.getEmail() != null && !req.getEmail().isBlank()) {
             user.setEmail(req.getEmail().trim());
         }
         if (req.getRole() != null && !req.getRole().isBlank()) {
-            user.setRole(parseRole(req.getRole()));
+            Role newRole = parseRole(req.getRole());
+            if ((isRootAdmin || isSelf) && newRole != Role.ROLE_ADMIN) {
+                throw new IllegalArgumentException("Nie można odebrać uprawnień ROLE_ADMIN głównemu lub własnemu kontu administratora.");
+            }
+            user.setRole(newRole);
         }
         if (req.getIsActive() != null) {
+            if ((isRootAdmin || isSelf) && !Boolean.TRUE.equals(req.getIsActive())) {
+                throw new IllegalArgumentException("Nie można zablokować głównego ani własnego konta administratora.");
+            }
             user.setIsActive(req.getIsActive());
         }
 
@@ -77,10 +90,16 @@ public class AdminUserController {
     }
 
     @DeleteMapping("/{id}")
-    public ResponseEntity<Void> deleteUser(@PathVariable Long id) {
-        if (!userRepository.existsById(id)) {
-            throw new IllegalArgumentException("Nie znaleziono użytkownika o ID: " + id);
+    public ResponseEntity<Void> deleteUser(@PathVariable Long id, Authentication authentication) {
+        User user = userRepository.findById(id)
+            .orElseThrow(() -> new IllegalArgumentException("Nie znaleziono użytkownika o ID: " + id));
+
+        String currentUsername = authentication != null ? authentication.getName() : null;
+        if ("admin".equalsIgnoreCase(user.getUsername())
+                || (currentUsername != null && currentUsername.equalsIgnoreCase(user.getUsername()))) {
+            throw new IllegalArgumentException("Nie można usunąć głównego ani własnego konta administratora.");
         }
+
         userRepository.deleteById(id);
         return ResponseEntity.noContent().build();
     }

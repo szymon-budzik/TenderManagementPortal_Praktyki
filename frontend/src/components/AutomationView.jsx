@@ -168,6 +168,7 @@ export default function AutomationView() {
     setProfileForm({
       name: p.name || '',
       enabled: Boolean(p.enabled),
+      notificationsEnabled: p.notificationsEnabled !== false,
       scheduleType: isInterval ? 'INTERVAL' : 'SCHEDULE',
       cronTime: p.cronTime || '8:00',
       intervalMinutes: p.intervalMinutes || 60,
@@ -176,7 +177,6 @@ export default function AutomationView() {
       categoryModes: parseCategoryModesMap(p.categoryIds, p.matchMode),
       recipientEmails: p.recipientEmails || '',
       smtpAccountId: p.smtpAccountId ? String(p.smtpAccountId) : '',
-      notificationsEnabled: p.notificationsEnabled !== false,
     });
   };
 
@@ -451,7 +451,7 @@ export default function AutomationView() {
             </div>
           </div>
 
-          {/* Wiersz 2: Parametry czasu Crona (z ikonką "?" i szarymi tagami) + E-maile */}
+          {/* Wiersz 2: Parametry czasu Crona + E-maile */}
           <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-start bg-white p-4 rounded-xl border border-blue-200">
             <div className="md:col-span-6 space-y-2">
               {profileForm.scheduleType === 'INTERVAL' ? (
@@ -487,7 +487,6 @@ export default function AutomationView() {
                       Harmonogram (godziny i opcjonalnie dni tygodnia)
                     </label>
 
-                    {/* Ikonka "?" z chmurką wyjaśniającą składnię po najechaniu */}
                     <div className="relative group inline-flex items-center">
                       <HelpCircle
                         size={16}
@@ -548,7 +547,6 @@ export default function AutomationView() {
               )}
             </div>
 
-            {/* Odbiorcy e-mail: zaciemnione gdy Brak SMTP, opcjonalne gdy wybrane SMTP */}
             <div className="md:col-span-6">
               <label
                 className={`block text-xs font-bold uppercase mb-1 ${
@@ -598,15 +596,29 @@ export default function AutomationView() {
             </div>
           </div>
 
-          {/* Wiersz 3: Wybór Endpointów i Kategorii (z przyciskiem OR/AND na prostokącie kategorii) */}
+          {/* Wiersz 3: Wybór Endpointów (ze statusem AKTYWNY/WYŁĄCZONY) i Kategorii (z OR/AND) */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="bg-white p-4 rounded-xl border border-blue-200 space-y-2.5">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-2">
                 <span className="text-xs font-extrabold uppercase flex items-center gap-1.5">
                   <Globe size={15} className="text-blue-600" />
                   Przypisz Endpointy ({profileForm.selectedEndpointIds.length})
                 </span>
                 <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setProfileForm({
+                        ...profileForm,
+                        selectedEndpointIds: endpoints
+                          .filter((e) => e.isActive)
+                          .map((e) => e.id),
+                      })
+                    }
+                    className="text-[11px] font-bold text-green-700 hover:underline cursor-pointer"
+                  >
+                    Tylko aktywne
+                  </button>
                   <button
                     type="button"
                     onClick={() =>
@@ -635,27 +647,49 @@ export default function AutomationView() {
                 ) : (
                   endpoints.map((ep) => {
                     const checked = profileForm.selectedEndpointIds.includes(ep.id);
+                    const isInactive = !ep.isActive;
                     return (
                       <label
                         key={ep.id}
-                        className={`flex items-center justify-between p-2 rounded-lg border text-xs cursor-pointer ${
-                          checked
+                        className={`flex items-center justify-between gap-2 p-2 rounded-lg border text-xs cursor-pointer transition ${
+                          isInactive
+                            ? checked
+                              ? 'bg-red-50 border-red-500 font-bold'
+                              : 'bg-slate-100 border-red-200 opacity-75 hover:bg-red-50/40'
+                            : checked
                             ? 'bg-blue-50 border-blue-500 font-bold'
                             : 'bg-white border-blue-100 hover:bg-slate-50'
                         }`}
                       >
-                        <div className="flex items-center gap-2 truncate">
+                        <div className="flex items-center gap-2 min-w-0">
                           <input
                             type="checkbox"
                             checked={checked}
                             onChange={() => toggleFormEndpoint(ep.id)}
-                            className="accent-blue-600 w-4 h-4"
+                            className="accent-blue-600 w-4 h-4 shrink-0"
                           />
-                          <span className="truncate">{ep.name}</span>
+                          <span
+                            className={`truncate ${
+                              isInactive ? 'line-through text-slate-600' : ''
+                            }`}
+                          >
+                            {ep.name}
+                          </span>
                         </div>
-                        <span className="font-mono text-[10px] px-1.5 py-0.5 bg-blue-100 rounded">
-                          {ep.httpMethod}
-                        </span>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-extrabold border ${
+                              ep.isActive
+                                ? 'bg-green-300 border-green-700 text-black'
+                                : 'bg-red-300 border-red-700 text-black'
+                            }`}
+                          >
+                            {ep.isActive ? 'AKTYWNY' : 'WYŁĄCZONY'}
+                          </span>
+                          <span className="font-mono text-[10px] px-1.5 py-0.5 bg-blue-100 rounded">
+                            {ep.httpMethod}
+                          </span>
+                        </div>
                       </label>
                     );
                   })
@@ -742,7 +776,7 @@ export default function AutomationView() {
             </div>
           </div>
 
-         <div className="flex flex-wrap items-center justify-between gap-4 pt-2">
+          <div className="flex flex-wrap items-center justify-between gap-4 pt-2">
             <div className="flex flex-wrap items-center gap-6">
               <label className="flex items-center gap-2 text-xs font-extrabold cursor-pointer select-none">
                 <input
@@ -810,13 +844,13 @@ export default function AutomationView() {
                 </th>
                 <th
                   onClick={() => toggleSort('enabled')}
-                  className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
+                  className="p-3.5 font-bold w-36 cursor-pointer hover:bg-blue-700 whitespace-nowrap"
                 >
                   <div className="inline-flex items-center gap-1">
                     Status <ArrowUpDown size={14} />
                   </div>
                 </th>
-                <th className="p-3.5 font-bold text-right">Akcje</th>
+                <th className="p-3.5 font-bold text-right whitespace-nowrap">Akcje</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-blue-100">
@@ -832,9 +866,7 @@ export default function AutomationView() {
                   const catModesMap = parseCategoryModesMap(p.categoryIds, p.matchMode);
                   const catIds = Object.keys(catModesMap).map(Number);
 
-                  const epNames = endpoints
-                    .filter((e) => epIds.includes(e.id))
-                    .map((e) => e.name);
+                  const assignedEndpoints = endpoints.filter((e) => epIds.includes(e.id));
                   const catLabels = categories
                     .filter((c) => catIds.includes(c.id))
                     .map((c) => `${c.name} (${catModesMap[c.id] || 'OR'})`);
@@ -878,8 +910,28 @@ export default function AutomationView() {
 
                       <td className="p-3.5 align-top space-y-1.5 text-xs">
                         <div>
-                          <span className="font-extrabold">Endpointy ({epNames.length}): </span>
-                          <span>{epNames.join(', ') || 'Brak'}</span>
+                          <span className="font-extrabold">
+                            Endpointy ({assignedEndpoints.length}):{' '}
+                          </span>
+                          {assignedEndpoints.length === 0 ? (
+                            <span>Brak</span>
+                          ) : (
+                            <span className="inline-flex flex-wrap gap-1 align-middle">
+                              {assignedEndpoints.map((e) => (
+                                <span
+                                  key={e.id}
+                                  className={`px-1.5 py-0.5 rounded border text-[11px] font-semibold ${
+                                    e.isActive
+                                      ? 'bg-slate-100 border-slate-300 text-black'
+                                      : 'bg-red-100 border-red-500 text-red-900 font-bold'
+                                  }`}
+                                >
+                                  {e.name}
+                                  {!e.isActive && ' (WYŁĄCZONY)'}
+                                </span>
+                              ))}
+                            </span>
+                          )}
                         </div>
                         <div>
                           <span className="font-extrabold">Kategorie ({catLabels.length}): </span>
@@ -940,6 +992,33 @@ export default function AutomationView() {
                                 <BellOff size={12} className="text-slate-500" /> Powiad.: NIE
                               </>
                             )}
+                          </button>
+                        </div>
+                      </td>
+
+                      <td className="p-3.5 text-right whitespace-nowrap align-top">
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            type="button"
+                            disabled={loadingAction}
+                            onClick={() => handleTriggerProfileNow(p)}
+                            className="flex items-center gap-1 px-3 py-1.5 bg-amber-100 hover:bg-amber-200 border-2 border-amber-500 text-black rounded-lg font-extrabold text-xs cursor-pointer"
+                          >
+                            <Play size={13} /> Uruchom
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleStartEditProfile(p)}
+                            className="flex items-center gap-1 px-3 py-1.5 bg-white border border-blue-400 hover:bg-blue-50 text-black rounded-lg font-bold text-xs cursor-pointer"
+                          >
+                            <Pencil size={13} /> Edytuj
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => confirmDeleteProfile(p)}
+                            className="flex items-center gap-1 px-3 py-1.5 bg-white border border-red-400 hover:bg-red-50 text-black rounded-lg font-bold text-xs cursor-pointer"
+                          >
+                            <Trash2 size={13} /> Usuń
                           </button>
                         </div>
                       </td>
