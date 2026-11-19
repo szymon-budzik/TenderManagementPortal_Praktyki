@@ -40,6 +40,8 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 import java.util.regex.Pattern;
+import com.przetargi.java_backend.entity.AutomationNotification;
+import com.przetargi.java_backend.repository.AutomationNotificationRepository;
 
 @Service
 @EnableScheduling
@@ -54,6 +56,7 @@ public class TenderExecutionService {
     private final CronConfigRepository cronConfigRepository;
     private final AutomationProfileRepository profileRepository;
     private final SmtpAccountRepository smtpAccountRepository;
+    private final AutomationNotificationRepository notificationRepository;
 
     @Value("${SCRAPER_SERVICE_URL:http://ingestion-worker:8000}")
     private String scraperServiceUrl;
@@ -68,7 +71,8 @@ public class TenderExecutionService {
             FetchRunRepository fetchRunRepository,
             CronConfigRepository cronConfigRepository,
             AutomationProfileRepository profileRepository,
-            SmtpAccountRepository smtpAccountRepository
+            SmtpAccountRepository smtpAccountRepository,
+            AutomationNotificationRepository notificationRepository
     ) {
         this.endpointRepository = endpointRepository;
         this.keywordCategoryRepository = keywordCategoryRepository;
@@ -77,6 +81,7 @@ public class TenderExecutionService {
         this.cronConfigRepository = cronConfigRepository;
         this.profileRepository = profileRepository;
         this.smtpAccountRepository = smtpAccountRepository;
+        this.notificationRepository = notificationRepository;
     }
 
     public CronConfig getOrCreateCronConfig() {
@@ -92,7 +97,7 @@ public class TenderExecutionService {
         ZonedDateTime nowPl = ZonedDateTime.now(POLAND_ZONE);
         String nowHm = nowPl.format(DateTimeFormatter.ofPattern("HH:mm"));
         String minuteKey = nowPl.toLocalDate() + " " + nowHm;
-        int todayDow = nowPl.getDayOfWeek().getValue(); // 1=Pon ... 7=Nd
+        int todayDow = nowPl.getDayOfWeek().getValue();
         OffsetDateTime nowOffset = nowPl.toOffsetDateTime();
 
         List<AutomationProfile> profiles = profileRepository.findAll();
@@ -106,26 +111,30 @@ public class TenderExecutionService {
                     ? profile.getScheduleType().trim().toUpperCase()
                     : "SCHEDULE";
 
-            if ("INTERVAL".equals(scheduleType)) {
-                int intervalMin = (profile.getIntervalMinutes() != null && profile.getIntervalMinutes() > 0)
-                        ? profile.getIntervalMinutes()
-                        : 60;
-                OffsetDateTime lastRun = lastIntervalTriggerByProfile.getOrDefault(
-                        profile.getId(),
-                        profile.getLastRunAt()
-                );
+            try {
+                if ("INTERVAL".equals(scheduleType)) {
+                    int intervalMin = (profile.getIntervalMinutes() != null && profile.getIntervalMinutes() > 0)
+                            ? profile.getIntervalMinutes()
+                            : 60;
+                    OffsetDateTime lastRun = lastIntervalTriggerByProfile.getOrDefault(
+                            profile.getId(),
+                            profile.getLastRunAt()
+                    );
 
-                if (lastRun == null || Duration.between(lastRun, nowOffset).toMinutes() >= intervalMin) {
-                    lastIntervalTriggerByProfile.put(profile.getId(), nowOffset);
-                    executeProfileNow(profile.getId());
+                    if (lastRun == null || Duration.between(lastRun, nowOffset).toMinutes() >= intervalMin) {
+                        lastIntervalTriggerByProfile.put(profile.getId(), nowOffset);
+                        executeProfileNow(profile.getId());
+                    }
+                } else {
+                    String lastMinute = lastTriggeredMinuteByProfile.getOrDefault(profile.getId(), "");
+                    if (!minuteKey.equals(lastMinute)
+                            && matchesScheduleExpression(profile.getCronTime(), nowHm, todayDow)) {
+                        lastTriggeredMinuteByProfile.put(profile.getId(), minuteKey);
+                        executeProfileNow(profile.getId());
+                    }
                 }
-            } else {
-                String lastMinute = lastTriggeredMinuteByProfile.getOrDefault(profile.getId(), "");
-                if (!minuteKey.equals(lastMinute)
-                        && matchesScheduleExpression(profile.getCronTime(), nowHm, todayDow)) {
-                    lastTriggeredMinuteByProfile.put(profile.getId(), minuteKey);
-                    executeProfileNow(profile.getId());
-                }
+            } catch (Exception ignored) {
+                // Błąd został już zapisany w powiadomieniach i statusie profilu
             }
         }
     }
@@ -183,39 +192,126 @@ public class TenderExecutionService {
         AutomationProfile profile = profileRepository.findById(profileId)
                 .orElseThrow(() -> new IllegalArgumentException("Nie znaleziono profilu o ID: " + profileId));
 
-        List<Long> epIds = parseIds(profile.getEndpointIds());
-        Map<Long, String> catModes = parseCategoryIdsWithModes(profile.getCategoryIds(), profile.getMatchMode());
-        List<Long> catIds = new ArrayList<>(catModes.keySet());
-
-        String runSourceLabel = "CRON [" + profile.getName() + "]";
-        ExecutionSummary summary = executeSearch(epIds, catIds, profile.getMatchMode(), catModes, runSourceLabel);
-
-        String statusMsg = "Zapisano: " + summary.savedCount() + " (Pobrano: " + summary.totalFetched() + ")";
-
-        // Wysyłka wyłącznie, gdy przypisano konkretne konto SMTP oraz podano adresy odbiorców
-        Long smtpId = profile.getSmtpAccountId();
-        List<String> emails = parseEmails(profile.getRecipientEmails());
-        if (smtpId != null && !emails.isEmpty() && summary.fetchRunId() != null) {
-            try {
-                EmailDispatchResult mailRes = sendRunsToEmails(
-                        List.of(summary.fetchRunId()),
-                        emails,
-                        "Raport Cron [" + profile.getName() + "] - Przetargi",
-                        smtpId
-                );
-                statusMsg += " | Email: " + mailRes.message();
-            } catch (Exception e) {
-                statusMsg += " | Blad email: " + e.getMessage();
-            }
-        }
-
         OffsetDateTime nowPl = OffsetDateTime.now(POLAND_ZONE);
-        profile.setLastRunAt(nowPl);
-        profile.setLastRunStatus(statusMsg);
-        profileRepository.save(profile);
-        lastIntervalTriggerByProfile.put(profile.getId(), nowPl);
 
-        return summary;
+        try {
+            List<Long> epIds = parseIds(profile.getEndpointIds());
+            Map<Long, String> catModes = parseCategoryIdsWithModes(profile.getCategoryIds(), profile.getMatchMode());
+            List<Long> catIds = new ArrayList<>(catModes.keySet());
+
+            if (epIds.isEmpty()) {
+                throw new IllegalArgumentException("Profil nie ma przypisanych żadnych endpointów.");
+            }
+            if (catIds.isEmpty()) {
+                throw new IllegalArgumentException("Profil nie ma przypisanych żadnych kategorii słów kluczowych.");
+            }
+
+            String runSourceLabel = "CRON [" + profile.getName() + "]";
+            ExecutionSummary summary = executeSearch(epIds, catIds, profile.getMatchMode(), catModes, runSourceLabel);
+
+            String statusMsg = "Zapisano: " + summary.savedCount() + " (Pobrano: " + summary.totalFetched() + ")";
+            boolean hasErrors = false;
+            List<String> errorReasons = new ArrayList<>();
+
+            StringBuilder details = new StringBuilder();
+            details.append("Profil: ").append(profile.getName()).append("\n");
+            details.append("Pobrano ogłoszeń: ").append(summary.totalFetched())
+                    .append(" | Zapisano (>0 pkt): ").append(summary.savedCount())
+                    .append(" | Wykluczono: ").append(summary.excludedCount())
+                    .append(" | Pominięto (0 pkt): ").append(summary.zeroScoreSkippedCount())
+                    .append("\n");
+
+            if (summary.logs() != null && !summary.logs().isEmpty()) {
+                details.append("\n--- Źródła danych ---\n");
+                for (SourceLog log : summary.logs()) {
+                    details.append(log.success() ? "[OK] " : "[BŁĄD] ")
+                            .append(log.sourceName())
+                            .append(": ")
+                            .append(log.message())
+                            .append("\n");
+                    if (!log.success()) {
+                        hasErrors = true;
+                        errorReasons.add(log.sourceName() + " — " + log.message());
+                    }
+                }
+            }
+
+            Long smtpId = profile.getSmtpAccountId();
+            List<String> emails = parseEmails(profile.getRecipientEmails());
+            if (smtpId != null && !emails.isEmpty() && summary.fetchRunId() != null) {
+                details.append("\n--- Wysyłka e-mail (SMTP) ---\n");
+                try {
+                    EmailDispatchResult mailRes = sendRunsToEmails(
+                            List.of(summary.fetchRunId()),
+                            emails,
+                            "Raport Cron [" + profile.getName() + "] - Przetargi",
+                            smtpId
+                    );
+                    statusMsg += " | Email: " + mailRes.message();
+                    details.append(mailRes.sent() ? "[OK] " : "[BŁĄD] ")
+                            .append(mailRes.message())
+                            .append("\n");
+                    if (!mailRes.sent()) {
+                        hasErrors = true;
+                        errorReasons.add("SMTP: " + mailRes.message());
+                    }
+                } catch (Exception e) {
+                    String mailErr = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+                    statusMsg += " | Błąd email: " + mailErr;
+                    details.append("[BŁĄD] Nie udało się wysłać wiadomości e-mail: ").append(mailErr).append("\n");
+                    hasErrors = true;
+                    errorReasons.add("SMTP: " + mailErr);
+                }
+            } else {
+                details.append("\n--- Wysyłka e-mail ---\nPominięto (brak SMTP lub brak odbiorców).\n");
+            }
+
+            profile.setLastRunAt(nowPl);
+            profile.setLastRunStatus(statusMsg);
+            profileRepository.save(profile);
+            lastIntervalTriggerByProfile.put(profile.getId(), nowPl);
+
+            if (!Boolean.FALSE.equals(profile.getNotificationsEnabled())) {
+                AutomationNotification notif = new AutomationNotification();
+                notif.setProfileId(profile.getId());
+                notif.setProfileName(profile.getName());
+                notif.setSuccess(!hasErrors);
+                notif.setTitle(hasErrors
+                        ? "Błąd automatyzacji: " + profile.getName()
+                        : "Automatyzacja zakończona: " + profile.getName());
+                notif.setSummary(hasErrors
+                        ? "Wystąpiły błędy (" + errorReasons.size() + "). " + errorReasons.get(0)
+                        : "Pobrano: " + summary.totalFetched() + ", zapisano: " + summary.savedCount() + " przetargów.");
+                notif.setDetails(details.toString().trim());
+                notif.setIsRead(false);
+                notif.setCreatedAt(nowPl);
+                notificationRepository.save(notif);
+            }
+
+            return summary;
+        } catch (Exception e) {
+            String errMsg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+            profile.setLastRunAt(nowPl);
+            profile.setLastRunStatus("Błąd: " + errMsg);
+            profileRepository.save(profile);
+
+            if (!Boolean.FALSE.equals(profile.getNotificationsEnabled())) {
+                AutomationNotification notif = new AutomationNotification();
+                notif.setProfileId(profile.getId());
+                notif.setProfileName(profile.getName());
+                notif.setSuccess(false);
+                notif.setTitle("Niepowodzenie automatyzacji: " + profile.getName());
+                notif.setSummary("Przyczyna: " + errMsg);
+                notif.setDetails("Profil: " + profile.getName() + "\n"
+                        + "Typ błędu: " + e.getClass().getSimpleName() + "\n"
+                        + "Szczegóły: " + errMsg);
+                notif.setIsRead(false);
+                notif.setCreatedAt(nowPl);
+                notificationRepository.save(notif);
+            }
+
+            throw e;
+        }
     }
 
     public ExecutionSummary executeSearch(

@@ -56,6 +56,9 @@ public class AutomationProfile {
     @Column(name = "last_run_status", columnDefinition = "TEXT")
     private String lastRunStatus;
 
+    @Column(name = "notifications_enabled", nullable = false)
+    private Boolean notificationsEnabled = true;
+
     public AutomationProfile() {
     }
 
@@ -100,4 +103,7 @@ public class AutomationProfile {
 
     public String getLastRunStatus() { return lastRunStatus; }
     public void setLastRunStatus(String lastRunStatus) { this.lastRunStatus = lastRunStatus; }
+
+    public Boolean getNotificationsEnabled() { return notificationsEnabled; }
+    public void setNotificationsEnabled(Boolean notificationsEnabled) { this.notificationsEnabled = notificationsEnabled; }
 }

@@ -14,6 +14,8 @@ import {
   ArrowUpDown,
   Clock,
   HelpCircle,
+  Bell,
+  BellOff,
 } from 'lucide-react';
 
 function parseIdList(str) {
@@ -98,6 +100,7 @@ export default function AutomationView() {
   const [profileForm, setProfileForm] = useState({
     name: '',
     enabled: true,
+    notificationsEnabled: true,
     scheduleType: 'SCHEDULE', // 'SCHEDULE' | 'INTERVAL'
     cronTime: '8:00, 16:00',
     intervalMinutes: 60,
@@ -147,6 +150,7 @@ export default function AutomationView() {
     setProfileForm({
       name: '',
       enabled: true,
+      notificationsEnabled: true,
       scheduleType: 'SCHEDULE',
       cronTime: '8:00, 16:00',
       intervalMinutes: 60,
@@ -172,6 +176,7 @@ export default function AutomationView() {
       categoryModes: parseCategoryModesMap(p.categoryIds, p.matchMode),
       recipientEmails: p.recipientEmails || '',
       smtpAccountId: p.smtpAccountId ? String(p.smtpAccountId) : '',
+      notificationsEnabled: p.notificationsEnabled !== false,
     });
   };
 
@@ -245,6 +250,7 @@ export default function AutomationView() {
       categoryIds: serializedCategories,
       recipientEmails: hasSmtp ? profileForm.recipientEmails.trim() : '',
       smtpAccountId: hasSmtp ? Number(profileForm.smtpAccountId) : null,
+      notificationsEnabled: profileForm.notificationsEnabled,
     };
 
     try {
@@ -269,6 +275,18 @@ export default function AutomationView() {
       fetchAll();
     } catch (err) {
       console.error('Błąd zmiany statusu profilu:', err);
+    }
+  };
+
+  const handleToggleProfileNotifications = async (profile) => {
+    try {
+      await api.put(`/automation/profiles/${profile.id}`, {
+        ...profile,
+        notificationsEnabled: profile.notificationsEnabled === false,
+      });
+      fetchAll();
+    } catch (err) {
+      console.error('Błąd zmiany ustawień powiadomień profilu:', err);
     }
   };
 
@@ -724,16 +742,31 @@ export default function AutomationView() {
             </div>
           </div>
 
-          <div className="flex items-center justify-between pt-2">
-            <label className="flex items-center gap-2 text-xs font-extrabold cursor-pointer">
-              <input
-                type="checkbox"
-                checked={profileForm.enabled}
-                onChange={(e) => setProfileForm({ ...profileForm, enabled: e.target.checked })}
-                className="w-4 h-4 accent-blue-600"
-              />
-              Harmonogram profilu aktywny od razu po zapisaniu
-            </label>
+         <div className="flex flex-wrap items-center justify-between gap-4 pt-2">
+            <div className="flex flex-wrap items-center gap-6">
+              <label className="flex items-center gap-2 text-xs font-extrabold cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={profileForm.enabled}
+                  onChange={(e) => setProfileForm({ ...profileForm, enabled: e.target.checked })}
+                  className="w-4 h-4 accent-blue-600 cursor-pointer"
+                />
+                Harmonogram profilu aktywny od razu po zapisaniu
+              </label>
+
+              <label className="flex items-center gap-2 text-xs font-extrabold cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={profileForm.notificationsEnabled}
+                  onChange={(e) =>
+                    setProfileForm({ ...profileForm, notificationsEnabled: e.target.checked })
+                  }
+                  className="w-4 h-4 accent-blue-600 cursor-pointer"
+                />
+                <Bell size={14} className="text-blue-600" />
+                Powiadomienia z tego profilu
+              </label>
+            </div>
 
             <button
               type="submit"
@@ -875,42 +908,38 @@ export default function AutomationView() {
                       </td>
 
                       <td className="p-3.5 align-top">
-                        <button
-                          type="button"
-                          onClick={() => handleToggleProfileEnabled(p)}
-                          className={`w-28 text-center py-1.5 rounded-lg text-xs font-extrabold border-2 transition cursor-pointer ${
-                            p.enabled
-                              ? 'bg-green-400 hover:bg-green-500 border-green-800 text-black'
-                              : 'bg-red-400 hover:bg-red-500 border-red-800 text-black'
-                          }`}
-                        >
-                          {p.enabled ? 'AKTYWNY' : 'WYŁĄCZONY'}
-                        </button>
-                      </td>
+                        <div className="flex flex-col gap-1.5 items-start">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleProfileEnabled(p)}
+                            className={`w-28 text-center py-1.5 rounded-lg text-xs font-extrabold border-2 transition cursor-pointer ${
+                              p.enabled
+                                ? 'bg-green-400 hover:bg-green-500 border-green-800 text-black'
+                                : 'bg-red-400 hover:bg-red-500 border-red-800 text-black'
+                            }`}
+                          >
+                            {p.enabled ? 'AKTYWNY' : 'WYŁĄCZONY'}
+                          </button>
 
-                      <td className="p-3.5 text-right whitespace-nowrap align-top">
-                        <div className="flex items-center justify-end gap-2">
                           <button
                             type="button"
-                            disabled={loadingAction}
-                            onClick={() => handleTriggerProfileNow(p)}
-                            className="flex items-center gap-1 px-3 py-1.5 bg-amber-100 hover:bg-amber-200 border-2 border-amber-500 text-black rounded-lg font-extrabold text-xs cursor-pointer"
+                            onClick={() => handleToggleProfileNotifications(p)}
+                            title="Kliknij, aby włączyć lub wyłączyć powiadomienia dla tego profilu"
+                            className={`w-28 inline-flex items-center justify-center gap-1 py-1 rounded-lg text-[11px] font-extrabold border transition cursor-pointer ${
+                              p.notificationsEnabled !== false
+                                ? 'bg-blue-50 hover:bg-blue-100 border-blue-400 text-black'
+                                : 'bg-slate-200 hover:bg-slate-300 border-slate-400 text-slate-600'
+                            }`}
                           >
-                            <Play size={13} /> Uruchom
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleStartEditProfile(p)}
-                            className="flex items-center gap-1 px-3 py-1.5 bg-white border border-blue-400 hover:bg-blue-50 text-black rounded-lg font-bold text-xs cursor-pointer"
-                          >
-                            <Pencil size={13} /> Edytuj
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => confirmDeleteProfile(p)}
-                            className="flex items-center gap-1 px-3 py-1.5 bg-white border border-red-400 hover:bg-red-50 text-black rounded-lg font-bold text-xs cursor-pointer"
-                          >
-                            <Trash2 size={13} /> Usuń
+                            {p.notificationsEnabled !== false ? (
+                              <>
+                                <Bell size={12} className="text-blue-700" /> Powiad.: TAK
+                              </>
+                            ) : (
+                              <>
+                                <BellOff size={12} className="text-slate-500" /> Powiad.: NIE
+                              </>
+                            )}
                           </button>
                         </div>
                       </td>

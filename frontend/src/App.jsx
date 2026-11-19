@@ -10,6 +10,7 @@ import EndpointsView from './components/EndpointsView';
 import KeywordsView from './components/KeywordsView';
 import SmtpView from './components/SmtpView';
 import UsersView from './components/UsersView';
+import NotificationsBell from './components/NotificationsBell';
 import {
   Search,
   Clock,
@@ -116,9 +117,12 @@ export default function App() {
             <h1 className="text-xl font-extrabold text-black tracking-tight">
               System Przetargów
             </h1>
-            <p className="text-xs font-semibold text-black mt-1">
-              Zalogowany: <span className="underline">{auth.username}</span>
-            </p>
+            <div className="flex items-center justify-between gap-2 mt-1.5">
+              <p className="text-xs font-semibold text-black truncate">
+                Zalogowany: <span className="underline">{auth.username}</span>
+              </p>
+              <NotificationsBell />
+            </div>
           </div>
 
           <nav className="p-4 space-y-2">

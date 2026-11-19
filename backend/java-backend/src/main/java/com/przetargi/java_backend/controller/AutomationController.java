@@ -23,6 +23,10 @@ import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
+import com.przetargi.java_backend.entity.AutomationNotification;
+import com.przetargi.java_backend.repository.AutomationNotificationRepository;
+import org.springframework.web.bind.annotation.PatchMapping;
+
 @RestController
 @RequestMapping("/api/automation")
 public class AutomationController {
@@ -31,17 +35,20 @@ public class AutomationController {
     private final FetchRunRepository fetchRunRepository;
     private final AutomationProfileRepository profileRepository;
     private final SmtpAccountRepository smtpAccountRepository;
+    private final AutomationNotificationRepository notificationRepository;
 
     public AutomationController(
             TenderExecutionService executionService,
             FetchRunRepository fetchRunRepository,
             AutomationProfileRepository profileRepository,
-            SmtpAccountRepository smtpAccountRepository
+            SmtpAccountRepository smtpAccountRepository,
+            AutomationNotificationRepository notificationRepository
     ) {
         this.executionService = executionService;
         this.fetchRunRepository = fetchRunRepository;
         this.profileRepository = profileRepository;
         this.smtpAccountRepository = smtpAccountRepository;
+        this.notificationRepository = notificationRepository;
     }
 
     // --- KONFIGURACJE SERWERÓW SMTP (WIELE KONT) ---
@@ -111,6 +118,7 @@ public class AutomationController {
         p.setEndpointIds(incoming.getEndpointIds() != null ? incoming.getEndpointIds() : "");
         p.setCategoryIds(incoming.getCategoryIds() != null ? incoming.getCategoryIds() : "");
         p.setRecipientEmails(incoming.getRecipientEmails() != null ? incoming.getRecipientEmails().trim() : "");
+        p.setNotificationsEnabled(incoming.getNotificationsEnabled() != null ? incoming.getNotificationsEnabled() : true);
 
         return ResponseEntity.status(HttpStatus.CREATED).body(profileRepository.save(p));
     }
@@ -154,6 +162,9 @@ public class AutomationController {
         }
         if (incoming.getRecipientEmails() != null) {
             p.setRecipientEmails(incoming.getRecipientEmails().trim());
+        }
+        if (incoming.getNotificationsEnabled() != null) {
+            p.setNotificationsEnabled(incoming.getNotificationsEnabled());
         }
 
         return ResponseEntity.ok(profileRepository.save(p));
@@ -248,4 +259,39 @@ public class AutomationController {
             Integer zeroScoreCount,
             OffsetDateTime createdAt
     ) {}
+
+    // --- POWIADOMIENIA AUTOMATYZACJI ---
+
+    @GetMapping("/notifications")
+    public ResponseEntity<List<AutomationNotification>> getNotifications() {
+        return ResponseEntity.ok(notificationRepository.findTop50ByOrderByCreatedAtDesc());
+    }
+
+    @PatchMapping("/notifications/{id}/read")
+    public ResponseEntity<AutomationNotification> markNotificationRead(@PathVariable Long id) {
+        AutomationNotification n = notificationRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Nie znaleziono powiadomienia o ID: " + id));
+        n.setIsRead(true);
+        return ResponseEntity.ok(notificationRepository.save(n));
+    }
+
+    @PatchMapping("/notifications/read-all")
+    public ResponseEntity<Void> markAllNotificationsRead() {
+        List<AutomationNotification> unread = notificationRepository.findByIsReadFalse();
+        for (AutomationNotification n : unread) {
+            n.setIsRead(true);
+        }
+        if (!unread.isEmpty()) {
+            notificationRepository.saveAll(unread);
+        }
+        return ResponseEntity.noContent().build();
+    }
+
+    @DeleteMapping("/notifications/{id}")
+    public ResponseEntity<Void> deleteNotification(@PathVariable Long id) {
+        if (notificationRepository.existsById(id)) {
+            notificationRepository.deleteById(id);
+        }
+        return ResponseEntity.noContent().build();
+    }
 }
