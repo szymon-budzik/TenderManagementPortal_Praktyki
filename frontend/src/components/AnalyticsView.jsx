@@ -188,7 +188,7 @@ export default function AnalyticsView() {
           .filter(Boolean);
 
         parts.forEach((rawPart) => {
-          if (rawPart.toUpperCase().endsWith(':EXCLUDED')) return;
+          if (rawPart.toUpperCase().includes(':EXCLUDED')) return;
           const cleanWord = rawPart.split(':')[0].trim();
           if (!cleanWord) return;
 
@@ -207,7 +207,7 @@ export default function AnalyticsView() {
       filteredTenders.forEach((t) => {
         const text = `${t.title || ''} ${t.description || ''}`.toLowerCase();
         kwMap.forEach((entry, key) => {
-          if (text.includes(key)) {
+          if (text.includes(key.endsWith('*') ? key.slice(0, -1) : key)) {
             entry.count += 1;
             entry.totalScore += Number(t.score) || 0;
           }

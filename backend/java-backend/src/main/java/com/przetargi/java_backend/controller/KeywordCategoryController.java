@@ -94,6 +94,14 @@ public class KeywordCategoryController {
             if (trimmed.isEmpty()) {
                 continue;
             }
+
+            boolean isWildcard = false;
+            if (trimmed.toUpperCase().endsWith(":WILDCARD")) {
+                isWildcard = true;
+                trimmed = trimmed.substring(0, trimmed.length() - ":WILDCARD".length()).trim();
+            }
+
+            String base;
             int colonIdx = trimmed.lastIndexOf(':');
             if (colonIdx > 0) {
                 String word = trimmed.substring(0, colonIdx).trim();
@@ -102,18 +110,20 @@ public class KeywordCategoryController {
                     continue;
                 }
                 if ("EXCLUDED".equals(suffix)) {
-                    formatted.add(word + ":EXCLUDED");
+                    base = word + ":EXCLUDED";
                 } else {
                     try {
                         int weight = Math.max(1, Math.min(100, Integer.parseInt(suffix)));
-                        formatted.add(word + ":" + weight);
+                        base = word + ":" + weight;
                     } catch (NumberFormatException e) {
-                        formatted.add(word + ":50");
+                        base = word + ":50";
                     }
                 }
             } else {
-                formatted.add(trimmed + ":50");
+                base = trimmed + ":50";
             }
+
+            formatted.add(isWildcard ? base + ":WILDCARD" : base);
         }
 
         if (formatted.isEmpty()) {

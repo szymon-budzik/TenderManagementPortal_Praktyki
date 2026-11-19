@@ -39,6 +39,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import java.util.regex.Pattern;
+
 @Service
 @EnableScheduling
 public class TenderExecutionService {
@@ -381,6 +383,13 @@ public class TenderExecutionService {
             if (trimmed.isEmpty()) {
                 continue;
             }
+
+            boolean isWildcard = false;
+            if (trimmed.toUpperCase().endsWith(":WILDCARD")) {
+                isWildcard = true;
+                trimmed = trimmed.substring(0, trimmed.length() - ":WILDCARD".length()).trim();
+            }
+
             int colonIdx = trimmed.lastIndexOf(':');
             if (colonIdx > 0) {
                 String word = trimmed.substring(0, colonIdx).trim().toLowerCase();
@@ -389,26 +398,48 @@ public class TenderExecutionService {
                     continue;
                 }
                 if ("EXCLUDED".equals(suffix) || wholeCatExcluded) {
-                    list.add(new ParsedKeyword(word, 0, true));
+                    list.add(new ParsedKeyword(word, 0, true, isWildcard));
                 } else {
                     try {
                         int w = Math.max(1, Math.min(100, Integer.parseInt(suffix)));
-                        list.add(new ParsedKeyword(word, w, false));
+                        list.add(new ParsedKeyword(word, w, false, isWildcard));
                     } catch (NumberFormatException e) {
-                        list.add(new ParsedKeyword(word, fallbackScore, false));
+                        list.add(new ParsedKeyword(word, fallbackScore, false, isWildcard));
                     }
                 }
             } else {
-                list.add(new ParsedKeyword(trimmed.toLowerCase(), fallbackScore, wholeCatExcluded));
+                list.add(new ParsedKeyword(trimmed.toLowerCase(), fallbackScore, wholeCatExcluded, isWildcard));
             }
         }
         return list;
     }
 
+    private boolean matchesKeyword(String text, ParsedKeyword pk) {
+        if (text == null || text.isEmpty() || pk.word() == null || pk.word().isEmpty()) {
+            return false;
+        }
+        // Odmiana końcówek (Wildcard *): jeśli opcja jest włączona i słowo kończy się na '*'
+        if (pk.wildcard() && pk.word().endsWith("*")) {
+            String stem = pk.word().substring(0, pk.word().length() - 1).trim();
+            if (stem.isEmpty()) {
+                return false;
+            }
+            String regex = "(?<![\\p{L}\\p{N}_])" + Pattern.quote(stem) + "[\\p{L}\\p{N}]*";
+            return Pattern.compile(regex, Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE)
+                    .matcher(text)
+                    .find();
+        }
+        // Standardowe dokładne dopasowanie słowa/frazy
+        String regex = "(?<![\\p{L}\\p{N}_])" + Pattern.quote(pk.word()) + "(?![\\p{L}\\p{N}_])";
+        return Pattern.compile(regex, Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE)
+                .matcher(text)
+                .find();
+    }
+
     private boolean containsAnyExcludedWord(String text, List<KeywordCategory> categories) {
         for (KeywordCategory cat : categories) {
             for (ParsedKeyword pk : parseCategoryKeywords(cat)) {
-                if (pk.excluded() && text.contains(pk.word())) {
+                if (pk.excluded() && matchesKeyword(text, pk)) {
                     return true;
                 }
             }
@@ -430,7 +461,7 @@ public class TenderExecutionService {
         int sum = 0;
         int matchedCount = 0;
         for (ParsedKeyword pk : positiveWords) {
-            if (text.contains(pk.word())) {
+            if (matchesKeyword(text, pk)) {
                 matchedCount++;
                 sum += pk.weight();
             }
@@ -846,7 +877,7 @@ public class TenderExecutionService {
                 .replace("\n", "\\n");
     }
 
-    public record ParsedKeyword(String word, int weight, boolean excluded) {}
+    public record ParsedKeyword(String word, int weight, boolean excluded, boolean wildcard) {}
     public record RawItem(String externalId, String title, String description) {}
     public record SourceLog(String sourceName, boolean success, int savedCount, String message) {}
     public record ExecutionSummary(

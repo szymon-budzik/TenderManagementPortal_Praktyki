@@ -10,27 +10,41 @@ export function parseKeywordsString(raw) {
     .map((part) => part.trim())
     .filter(Boolean)
     .map((item) => {
-      const idx = item.lastIndexOf(':');
+      let current = item;
+      let isWildcard = false;
+
+      if (current.toUpperCase().endsWith(':WILDCARD')) {
+        isWildcard = true;
+        current = current.substring(0, current.length - ':WILDCARD'.length).trim();
+      }
+
+      const idx = current.lastIndexOf(':');
       if (idx > 0) {
-        const word = item.substring(0, idx).trim();
-        const val = item.substring(idx + 1).trim().toUpperCase();
+        const word = current.substring(0, idx).trim();
+        const val = current.substring(idx + 1).trim().toUpperCase();
         if (val === 'EXCLUDED') {
-          return { word, score: 50, isExcluded: true };
+          return { word, score: 50, isExcluded: true, isWildcard };
         }
         const parsedScore = parseInt(val, 10);
         return {
           word,
           score: Number.isNaN(parsedScore) ? 50 : Math.max(1, Math.min(100, parsedScore)),
           isExcluded: false,
+          isWildcard,
         };
       }
-      return { word: item, score: 50, isExcluded: false };
+      return { word: current, score: 50, isExcluded: false, isWildcard };
     });
 }
 
 export function serializeKeywordsList(list) {
   return list
-    .map((k) => `${k.word.trim()}:${k.isExcluded ? 'EXCLUDED' : k.score}`)
+    .map(
+      (k) =>
+        `${k.word.trim()}:${k.isExcluded ? 'EXCLUDED' : k.score}${
+          k.isWildcard ? ':WILDCARD' : ''
+        }`
+    )
     .join(', ');
 }
 
@@ -113,11 +127,27 @@ export default function KeywordsView() {
       word: kwObj.word,
       score: kwObj.score,
       isExcluded: kwObj.isExcluded,
+      isWildcard: Boolean(kwObj.isWildcard),
+    });
+  };
+
+  const handleToggleWildcard = (checked) => {
+    setSelectedKeyword((prev) => {
+      if (!prev) return prev;
+      let nextWord = prev.word.trim();
+      if (checked && nextWord && !nextWord.endsWith('*')) {
+        nextWord = `${nextWord}*`;
+      }
+      return {
+        ...prev,
+        word: nextWord,
+        isWildcard: checked,
+      };
     });
   };
 
   const handleSaveSelectedKeyword = async () => {
-    if (!selectedKeyword) return;
+    if (!selectedKeyword || !selectedKeyword.word.trim()) return;
     const cat = categories.find((c) => c.id === selectedKeyword.catId);
     if (!cat) return;
 
@@ -128,6 +158,7 @@ export default function KeywordsView() {
       word: selectedKeyword.word.trim(),
       score: selectedKeyword.isExcluded ? 50 : Number(selectedKeyword.score),
       isExcluded: Boolean(selectedKeyword.isExcluded),
+      isWildcard: Boolean(selectedKeyword.isWildcard),
     };
 
     try {
@@ -180,7 +211,7 @@ export default function KeywordsView() {
       .split(',')
       .map((w) => w.trim())
       .filter(Boolean)
-      .map((w) => ({ word: w, score: 50, isExcluded: false }));
+      .map((w) => ({ word: w, score: 50, isExcluded: false, isWildcard: false }));
 
     const combined = [...existing, ...added];
     try {
@@ -255,7 +286,7 @@ export default function KeywordsView() {
         <div>
           <h2 className="text-2xl font-bold text-black">Kategorie i Wagi Słów Kluczowych</h2>
           <p className="text-xs font-semibold text-black">
-            Utwórz kategorię ze słowami kluczowymi, a następnie kliknij w wybrane słowo na liście poniżej, aby nadać mu wagę (1–100) lub wykluczyć.
+            Utwórz kategorię ze słowami kluczowymi (np. dostaw*), a następnie kliknij słowo na liście, aby ustawić wagę (1–100), odmianę końcówek (*) lub wykluczenie.
           </p>
         </div>
       </div>
@@ -272,7 +303,7 @@ export default function KeywordsView() {
               required
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="np. IT, Frontend, Backend"
+              placeholder="np. IT, Frontend, Logistyka"
               className="w-full px-3.5 py-2.5 border border-blue-300 rounded-lg text-black font-semibold focus:outline-none focus:border-blue-600"
             />
           </div>
@@ -286,7 +317,7 @@ export default function KeywordsView() {
               required
               value={keywordsInput}
               onChange={(e) => setKeywordsInput(e.target.value)}
-              placeholder="np. oprogramowanie, java, python"
+              placeholder="np. oprogramowanie, dostaw*, python"
               className="w-full px-3.5 py-2.5 border border-blue-300 rounded-lg text-black font-mono text-sm focus:outline-none focus:border-blue-600"
             />
             {previewWords.length > 0 && (
@@ -314,6 +345,7 @@ export default function KeywordsView() {
         </div>
       </form>
 
+      {/* Panel konfiguracji klikniętego słowa kluczowego */}
       {selectedKeyword && (
         <div className="bg-white p-6 rounded-xl border-2 border-blue-600 shadow-md space-y-4">
           <div className="flex items-center justify-between border-b border-blue-100 pb-3">
@@ -335,69 +367,115 @@ export default function KeywordsView() {
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-center bg-slate-50 p-4 rounded-xl border border-blue-200">
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <label
-                  className={`text-xs font-extrabold uppercase ${
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start bg-slate-50 p-4 rounded-xl border border-blue-200">
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-extrabold uppercase mb-1 text-black">
+                  Treść słowa kluczowego
+                </label>
+                <input
+                  type="text"
+                  value={selectedKeyword.word}
+                  onChange={(e) =>
+                    setSelectedKeyword({ ...selectedKeyword, word: e.target.value })
+                  }
+                  placeholder="np. dostaw*"
+                  className="w-full px-3 py-2 border border-blue-300 rounded-lg bg-white text-black font-mono text-sm font-bold"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label
+                    className={`text-xs font-extrabold uppercase ${
+                      selectedKeyword.isExcluded ? 'text-gray-400' : 'text-black'
+                    }`}
+                  >
+                    Waga słowa kluczowego (1–100 pkt)
+                  </label>
+                  <span
+                    className={`px-3 py-1 rounded-lg text-sm font-extrabold border ${
+                      selectedKeyword.isExcluded
+                        ? 'bg-gray-200 border-gray-400 text-gray-500'
+                        : selectedKeyword.isWildcard
+                        ? 'bg-purple-600 border-purple-900 text-white'
+                        : 'bg-blue-600 border-blue-800 text-white'
+                    }`}
+                  >
+                    {selectedKeyword.isExcluded ? 'Wyłączony' : `${selectedKeyword.score} pkt`}
+                  </span>
+                </div>
+
+                <input
+                  type="range"
+                  min="1"
+                  max="100"
+                  disabled={selectedKeyword.isExcluded}
+                  value={selectedKeyword.score}
+                  onChange={(e) =>
+                    setSelectedKeyword({ ...selectedKeyword, score: Number(e.target.value) })
+                  }
+                  className={`w-full h-2.5 rounded-lg appearance-none ${
+                    selectedKeyword.isExcluded
+                      ? 'bg-gray-300 accent-gray-400 opacity-45 cursor-not-allowed'
+                      : selectedKeyword.isWildcard
+                      ? 'bg-purple-200 accent-purple-600 cursor-pointer'
+                      : 'bg-blue-200 accent-blue-600 cursor-pointer'
+                  }`}
+                />
+                <div
+                  className={`flex justify-between text-xs font-bold ${
                     selectedKeyword.isExcluded ? 'text-gray-400' : 'text-black'
                   }`}
                 >
-                  Waga słowa kluczowego (1–100 pkt)
-                </label>
-                <span
-                  className={`px-3 py-1 rounded-lg text-sm font-extrabold border ${
-                    selectedKeyword.isExcluded
-                      ? 'bg-gray-200 border-gray-400 text-gray-500'
-                      : 'bg-blue-600 border-blue-800 text-white'
-                  }`}
-                >
-                  {selectedKeyword.isExcluded ? 'Wyłączony' : `${selectedKeyword.score} pkt`}
-                </span>
-              </div>
-
-              <input
-                type="range"
-                min="1"
-                max="100"
-                disabled={selectedKeyword.isExcluded}
-                value={selectedKeyword.score}
-                onChange={(e) =>
-                  setSelectedKeyword({ ...selectedKeyword, score: Number(e.target.value) })
-                }
-                className={`w-full h-2.5 rounded-lg appearance-none ${
-                  selectedKeyword.isExcluded
-                    ? 'bg-gray-300 accent-gray-400 opacity-45 cursor-not-allowed'
-                    : 'bg-blue-200 accent-blue-600 cursor-pointer'
-                }`}
-              />
-              <div
-                className={`flex justify-between text-xs font-bold ${
-                  selectedKeyword.isExcluded ? 'text-gray-400' : 'text-black'
-                }`}
-              >
-                <span>1 pkt</span>
-                <span>50 pkt</span>
-                <span>100 pkt</span>
+                  <span>1 pkt</span>
+                  <span>50 pkt</span>
+                  <span>100 pkt</span>
+                </div>
               </div>
             </div>
 
-            <div className="flex flex-col justify-between gap-4">
-              <label className="flex items-center gap-2.5 p-3 bg-white rounded-xl border-2 border-red-300 cursor-pointer select-none">
+            <div className="flex flex-col justify-between gap-3">
+              {/* Opcja Odmiana końcówek (Wildcard *) */}
+              <label className="flex items-start gap-2.5 p-3 bg-purple-50 rounded-xl border-2 border-purple-500 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={selectedKeyword.isWildcard}
+                  onChange={(e) => handleToggleWildcard(e.target.checked)}
+                  className="w-5 h-5 mt-0.5 accent-purple-700 cursor-pointer shrink-0"
+                />
+                <div>
+                  <div className="font-extrabold text-sm text-black">
+                    Odmiana końcówek (Wildcard *)
+                  </div>
+                  <div className="text-xs font-medium text-black/80 mt-0.5">
+                    Gdy słowo kończy się na <span className="font-mono font-bold">*</span> (np.{' '}
+                    <span className="font-mono font-bold">dostaw*</span>), dopasowuje dowolne końcówki: dostawa, dostawy, dostawie, dostawę.
+                  </div>
+                </div>
+              </label>
+
+              {/* Opcja Wyklucz */}
+              <label className="flex items-start gap-2.5 p-3 bg-white rounded-xl border-2 border-red-300 cursor-pointer select-none">
                 <input
                   type="checkbox"
                   checked={selectedKeyword.isExcluded}
                   onChange={(e) =>
                     setSelectedKeyword({ ...selectedKeyword, isExcluded: e.target.checked })
                   }
-                  className="w-5 h-5 accent-red-600 cursor-pointer"
+                  className="w-5 h-5 mt-0.5 accent-red-600 cursor-pointer shrink-0"
                 />
-                <span className="font-extrabold text-sm text-black">
-                  Wyklucz to słowo (oznacza na czerwono i odrzuca cały przetarg)
-                </span>
+                <div>
+                  <div className="font-extrabold text-sm text-black">
+                    Wyklucz to słowo
+                  </div>
+                  <div className="text-xs font-medium text-black/80 mt-0.5">
+                    Oznacza słowo na czerwono i odrzuca cały przetarg zawierający to słowo.
+                  </div>
+                </div>
               </label>
 
-              <div className="flex items-center justify-end gap-2">
+              <div className="flex items-center justify-end gap-2 pt-1">
                 <button
                   type="button"
                   onClick={confirmRemoveSingleKeyword}
@@ -442,7 +520,7 @@ export default function KeywordsView() {
                 className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
               >
                 <div className="inline-flex items-center gap-1">
-                  Słowa kluczowe (Kliknij w słowo, aby zmienić wagę 1–100 lub wykluczyć){' '}
+                  Słowa kluczowe (Kliknij w słowo, aby skonfigurować wagę, wildcard * lub wykluczenie){' '}
                   <ArrowUpDown size={14} />
                 </div>
               </th>
@@ -500,20 +578,38 @@ export default function KeywordsView() {
                             selectedKeyword?.catId === cat.id &&
                             selectedKeyword?.wordIndex === idx;
 
+                          let badgeStyle =
+                            'bg-blue-50 hover:bg-blue-100 border-blue-400 text-black';
+                          if (kw.isExcluded) {
+                            badgeStyle =
+                              'bg-red-400 hover:bg-red-500 border-red-800 text-black';
+                          } else if (kw.isWildcard) {
+                            badgeStyle = isSelected
+                              ? 'bg-purple-600 border-purple-900 text-white'
+                              : 'bg-purple-300 hover:bg-purple-400 border-purple-800 text-black';
+                          } else if (isSelected) {
+                            badgeStyle = 'bg-blue-600 border-blue-900 text-white';
+                          }
+
                           return (
                             <button
                               key={idx}
                               type="button"
                               onClick={() => handleSelectKeyword(cat, idx, kw)}
-                              className={`px-3 py-1.5 rounded-lg text-xs font-extrabold border-2 transition transform active:scale-95 cursor-pointer ${
+                              title={
                                 kw.isExcluded
-                                  ? 'bg-red-400 hover:bg-red-500 border-red-800 text-black'
-                                  : isSelected
-                                  ? 'bg-blue-600 border-blue-900 text-white'
-                                  : 'bg-blue-50 hover:bg-blue-100 border-blue-400 text-black'
-                              }`}
+                                  ? kw.isWildcard
+                                    ? 'Wykluczone + Odmiana końcówek (*)'
+                                    : 'Słowo wykluczające'
+                                  : kw.isWildcard
+                                  ? 'Odmiana końcówek (Wildcard *) — dopasowuje różne końcówki'
+                                  : 'Kliknij, aby skonfigurować'
+                              }
+                              className={`px-3 py-1.5 rounded-lg text-xs font-extrabold border-2 transition transform active:scale-95 cursor-pointer ${badgeStyle}`}
                             >
-                              {kw.isExcluded ? `${kw.word} (WYKLUCZ)` : `${kw.word}: ${kw.score}`}
+                              {kw.isExcluded
+                                ? `${kw.word} (WYKLUCZ)`
+                                : `${kw.word}: ${kw.score}`}
                             </button>
                           );
                         })}
@@ -536,7 +632,7 @@ export default function KeywordsView() {
                             type="text"
                             value={newWordsText}
                             onChange={(e) => setNewWordsText(e.target.value)}
-                            placeholder="np. docker, kubernetes"
+                            placeholder="np. docker, dostaw*"
                             className="flex-1 px-2.5 py-1 border border-blue-400 rounded bg-white text-black text-xs font-mono"
                           />
                           <button

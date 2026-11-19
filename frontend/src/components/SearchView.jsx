@@ -319,9 +319,18 @@ export default function SearchView() {
                       {parsedWords.map((kw, idx) => (
                         <span
                           key={idx}
+                          title={
+                            kw.isExcluded
+                              ? 'Słowo wykluczające'
+                              : kw.isWildcard
+                              ? 'Odmiana końcówek (Wildcard *)'
+                              : `Waga: ${kw.score} pkt`
+                          }
                           className={`px-2.5 py-0.5 rounded text-xs font-extrabold border ${
                             kw.isExcluded
                               ? 'bg-red-400 border-red-800 text-black'
+                              : kw.isWildcard
+                              ? 'bg-purple-300 border-purple-800 text-black'
                               : 'bg-white border-blue-300 text-black'
                           }`}
                         >
