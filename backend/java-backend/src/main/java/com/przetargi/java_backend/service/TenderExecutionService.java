@@ -336,7 +336,7 @@ public class TenderExecutionService {
         int excludedCount = 0;
         int zeroScoreSkippedCount = 0;
         List<SourceLog> logs = new ArrayList<>();
-        List<Tender> savedTendersInRun = new ArrayList<>();
+        Map<Long, Tender> savedTendersInRun = new LinkedHashMap<>();
         List<String> sourceNames = new ArrayList<>();
 
         HttpClient client = HttpClient.newBuilder()
@@ -419,9 +419,10 @@ public class TenderExecutionService {
                     tender.setScore(finalScore);
 
                     Tender savedTender = tenderRepository.save(tender);
-                    savedTendersInRun.add(savedTender);
-                    savedCount++;
-                    epSaved++;
+                    if (savedTendersInRun.put(savedTender.getId(), savedTender) == null) {
+                        savedCount++;
+                        epSaved++;
+                    }
                 }
 
                 ep.setLastSyncAt(OffsetDateTime.now(POLAND_ZONE));
@@ -446,7 +447,7 @@ public class TenderExecutionService {
         run.setExcludedCount(excludedCount);
         run.setZeroScoreCount(zeroScoreSkippedCount);
         run.setCreatedAt(OffsetDateTime.now(POLAND_ZONE));
-        run.setTenders(savedTendersInRun);
+        run.setTenders(new ArrayList<>(savedTendersInRun.values()));
         FetchRun savedRun = fetchRunRepository.save(run);
 
         return new ExecutionSummary(
@@ -954,24 +955,43 @@ public class TenderExecutionService {
     }
 
     private String extractGenericId(Map<String, String> flat) {
-        List<String> exactKeys = List.of("id", "externalid", "uuid", "guid", "code", "number", "identifier", "ref");
+        List<String> exactKeys = List.of("id", "externalid", "uuid", "guid", "number", "identifier", "code", "ref");
+
+        // 1. Dokładne klucze na głównym poziomie obiektu (np. "id", "uuid", "number")
         for (String target : exactKeys) {
             for (Map.Entry<String, String> e : flat.entrySet()) {
-                String leaf = extractLeafKey(e.getKey());
-                String val = e.getValue();
-                if (leaf.equals(target) && isValidIdCandidate(val)) {
-                    return val.trim();
+                if (isTopLevelKey(e.getKey())
+                        && extractLeafKey(e.getKey()).equals(target)
+                        && isValidIdCandidate(e.getValue())) {
+                    return e.getValue().trim();
                 }
             }
         }
+
+        // 2. Klucze kończące się na "id" lub "number" na głównym poziomie (np. "objectId", "publication-number")
         for (Map.Entry<String, String> e : flat.entrySet()) {
             String leaf = extractLeafKey(e.getKey());
-            String val = e.getValue();
-            if ((leaf.endsWith("id") || leaf.endsWith("number")) && isValidIdCandidate(val)) {
-                return val.trim();
+            if (isTopLevelKey(e.getKey())
+                    && (leaf.endsWith("id") || leaf.endsWith("number"))
+                    && isValidIdCandidate(e.getValue())) {
+                return e.getValue().trim();
             }
         }
+
+        // 3. Fallback: zagnieżdżone identyfikatory (omijając ogólne kody typu status.code)
+        for (String target : List.of("id", "externalid", "uuid", "guid", "identifier")) {
+            for (Map.Entry<String, String> e : flat.entrySet()) {
+                if (extractLeafKey(e.getKey()).equals(target) && isValidIdCandidate(e.getValue())) {
+                    return e.getValue().trim();
+                }
+            }
+        }
+
         return null;
+    }
+
+    private boolean isTopLevelKey(String path) {
+        return path != null && !path.contains(".") && !path.contains("[");
     }
 
     private String extractGenericTitle(Map<String, String> flat) {
