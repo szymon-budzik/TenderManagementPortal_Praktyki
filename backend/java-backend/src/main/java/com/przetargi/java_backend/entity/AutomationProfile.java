@@ -26,7 +26,7 @@ public class AutomationProfile {
     @Column(name = "schedule_type", nullable = false, length = 30)
     private String scheduleType = "DAILY"; // DAILY | MULTI_TIME | INTERVAL | WEEKLY
 
-    @Column(name = "cron_time", nullable = false, length = 255)
+    @Column(name = "cron_time", nullable = false, length = 500)
     private String cronTime = "08:00";
 
     @Column(name = "interval_minutes")

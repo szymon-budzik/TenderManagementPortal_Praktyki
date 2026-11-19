@@ -33,12 +33,8 @@ export default function ReportsView() {
         api.get('/automation/runs').catch(() => ({ data: [] })),
         api.get('/automation/smtp-accounts').catch(() => ({ data: [] })),
       ]);
-      const smtpList = smtpRes.data || [];
       setRuns(runsRes.data || []);
-      setSmtpAccounts(smtpList);
-      if (smtpList.length > 0 && !manualSmtpId) {
-        setManualSmtpId(String(smtpList[0].id));
-      }
+      setSmtpAccounts(smtpRes.data || []);
     } catch (err) {
       console.error('Błąd pobierania raportów:', err);
     }
@@ -51,7 +47,7 @@ export default function ReportsView() {
         const runsRes = await api.get('/automation/runs');
         setRuns(runsRes.data || []);
       } catch {
-        // Ciche odświeżanie listy pobrań w tle co 10s
+        // Ciche odświeżanie w tle co 10s
       }
     }, 10000);
 
@@ -105,17 +101,14 @@ export default function ReportsView() {
   };
 
   const handleSendSelectedByEmail = async () => {
-    if (selectedRunIds.length === 0 || !manualEmails.trim()) return;
+    if (selectedRunIds.length === 0 || !manualSmtpId || !manualEmails.trim()) return;
     setLoadingAction(true);
     try {
-      const res = await api.post('/automation/runs/email', {
+      await api.post('/automation/runs/email', {
         runIds: selectedRunIds,
         emails: manualEmails,
-        smtpAccountId: manualSmtpId ? Number(manualSmtpId) : null,
+        smtpAccountId: Number(manualSmtpId),
       });
-      if (!res.data.sent && res.data.base64) {
-        downloadBase64Excel(res.data.base64, res.data.filename || 'raport_przetargi.xlsx');
-      }
     } catch (err) {
       console.error('Błąd wysyłki e-mail:', err);
     } finally {
@@ -162,6 +155,7 @@ export default function ReportsView() {
   }, [runs, runSort]);
 
   const manualEmailTags = parseEmailTags(manualEmails);
+  const isNoSmtp = !manualSmtpId;
 
   return (
     <div className="space-y-6 text-black">
@@ -183,7 +177,7 @@ export default function ReportsView() {
           Raporty Excel i Ręczna Wysyłka E-mail
         </h2>
         <p className="text-sm font-medium text-black mt-1">
-          Zaznacz jedno lub kilka pobrań z listy poniżej, aby pobrać zbiorczy arkusz Excel (.xlsx) lub wysłać go na wskazane adresy e-mail.
+          Zaznacz jedno lub kilka pobrań z listy poniżej, aby pobrać arkusz Excel (.xlsx) lub wysłać go na wskazane adresy e-mail.
         </p>
       </div>
 
@@ -196,7 +190,7 @@ export default function ReportsView() {
                 Lista wszystkich pobrań (Zaznacz jedno lub kilka)
               </h3>
               <p className="text-xs font-medium text-black">
-                Kliknij w nagłówek dowolnej kolumny, aby posortować tabelę. Lista odświeża się automatycznie po wykonaniu zadań Crona.
+                Kliknij w nagłówek kolumny, aby posortować tabelę.
               </p>
             </div>
           </div>
@@ -221,29 +215,16 @@ export default function ReportsView() {
 
         <div className="bg-blue-50/70 p-4 rounded-xl border border-blue-300 space-y-3">
           <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
-            <div className="md:col-span-5">
-              <label className="block text-xs font-extrabold uppercase mb-1">
-                Adresy e-mail odbiorców (rozdzielone przecinkiem) — Zaznaczono: {selectedRunIds.length}
-              </label>
-              <input
-                type="text"
-                value={manualEmails}
-                onChange={(e) => setManualEmails(e.target.value)}
-                placeholder="np. jan.kowalski@firma.pl, dzial.ofert@firma.pl"
-                className="w-full px-3.5 py-2 border border-blue-400 rounded-lg bg-white text-black text-sm font-mono"
-              />
-            </div>
-
             <div className="md:col-span-3">
               <label className="block text-xs font-extrabold uppercase mb-1">
-                Wyślij przez konto SMTP
+                Konto SMTP
               </label>
               <select
                 value={manualSmtpId}
                 onChange={(e) => setManualSmtpId(e.target.value)}
                 className="w-full px-3 py-2 border border-blue-400 rounded-lg bg-white text-black text-xs font-bold"
               >
-                <option value="">Domyślne konto SMTP</option>
+                <option value="">Brak SMTP</option>
                 {smtpAccounts.map((acc) => (
                   <option key={acc.id} value={acc.id}>
                     {acc.name} ({acc.smtpUsername || acc.username})
@@ -252,12 +233,38 @@ export default function ReportsView() {
               </select>
             </div>
 
+            <div className="md:col-span-5">
+              <label
+                className={`block text-xs font-extrabold uppercase mb-1 ${
+                  isNoSmtp ? 'text-slate-400' : 'text-black'
+                }`}
+              >
+                Odbiorcy e-mail (rozdzielone przecinkiem) — Zaznaczono: {selectedRunIds.length}
+              </label>
+              <input
+                type="text"
+                disabled={isNoSmtp}
+                value={isNoSmtp ? '' : manualEmails}
+                onChange={(e) => setManualEmails(e.target.value)}
+                placeholder={
+                  isNoSmtp
+                    ? 'Wybierz konto SMTP, aby wpisać odbiorców'
+                    : 'np. jan.kowalski@firma.pl, dzial.ofert@firma.pl'
+                }
+                className={`w-full px-3.5 py-2 border rounded-lg text-sm font-mono transition ${
+                  isNoSmtp
+                    ? 'bg-slate-200 border-slate-300 text-slate-500 cursor-not-allowed'
+                    : 'bg-white border-blue-400 text-black'
+                }`}
+              />
+            </div>
+
             <div className="md:col-span-2">
               <button
                 type="button"
-                disabled={loadingAction}
+                disabled={loadingAction || isNoSmtp || selectedRunIds.length === 0 || !manualEmails.trim()}
                 onClick={handleSendSelectedByEmail}
-                className="w-full flex items-center justify-center gap-1.5 py-2.5 px-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-extrabold rounded-lg text-xs cursor-pointer"
+                className="w-full flex items-center justify-center gap-1.5 py-2.5 px-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white font-extrabold rounded-lg text-xs cursor-pointer"
               >
                 <Mail size={15} />
                 Wyślij Excel
@@ -267,9 +274,9 @@ export default function ReportsView() {
             <div className="md:col-span-2">
               <button
                 type="button"
-                disabled={loadingAction}
+                disabled={loadingAction || selectedRunIds.length === 0}
                 onClick={handleDownloadSelectedExcel}
-                className="w-full flex items-center justify-center gap-1.5 py-2.5 px-3 bg-green-400 hover:bg-green-500 border-2 border-green-800 text-black font-extrabold rounded-lg text-xs cursor-pointer"
+                className="w-full flex items-center justify-center gap-1.5 py-2.5 px-3 bg-green-400 hover:bg-green-500 disabled:opacity-40 border-2 border-green-800 text-black font-extrabold rounded-lg text-xs cursor-pointer"
               >
                 <Download size={15} />
                 Pobierz .xlsx
@@ -277,7 +284,7 @@ export default function ReportsView() {
             </div>
           </div>
 
-          {manualEmailTags.length > 0 && (
+          {!isNoSmtp && manualEmailTags.length > 0 && (
             <div className="flex flex-wrap gap-1.5 pt-1">
               {manualEmailTags.map((email, idx) => (
                 <span

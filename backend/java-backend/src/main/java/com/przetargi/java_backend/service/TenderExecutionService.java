@@ -22,6 +22,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import java.lang.reflect.Method;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -36,7 +37,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Service
@@ -57,6 +57,7 @@ public class TenderExecutionService {
     private String scraperServiceUrl;
 
     private final Map<Long, String> lastTriggeredMinuteByProfile = new ConcurrentHashMap<>();
+    private final Map<Long, OffsetDateTime> lastIntervalTriggerByProfile = new ConcurrentHashMap<>();
 
     public TenderExecutionService(
             ApiEndpointRepository endpointRepository,
@@ -84,12 +85,13 @@ public class TenderExecutionService {
         });
     }
 
-    @Scheduled(fixedRate = 15000)
+    @Scheduled(fixedRate = 20000)
     public void checkAndRunScheduledProfiles() {
         ZonedDateTime nowPl = ZonedDateTime.now(POLAND_ZONE);
         String nowHm = nowPl.format(DateTimeFormatter.ofPattern("HH:mm"));
-        String stampKey = nowPl.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
-        int currentDayOfWeek = nowPl.getDayOfWeek().getValue(); // 1 (Pon) - 7 (Nd)
+        String minuteKey = nowPl.toLocalDate() + " " + nowHm;
+        int todayDow = nowPl.getDayOfWeek().getValue(); // 1=Pon ... 7=Nd
+        OffsetDateTime nowOffset = nowPl.toOffsetDateTime();
 
         List<AutomationProfile> profiles = profileRepository.findAll();
 
@@ -98,62 +100,81 @@ public class TenderExecutionService {
                 continue;
             }
 
-            String type = profile.getScheduleType() != null
-                    ? profile.getScheduleType().toUpperCase()
-                    : "DAILY";
+            String scheduleType = profile.getScheduleType() != null
+                    ? profile.getScheduleType().trim().toUpperCase()
+                    : "SCHEDULE";
 
-            if ("INTERVAL".equals(type)) {
-                int intervalMins = profile.getIntervalMinutes() != null && profile.getIntervalMinutes() > 0
+            if ("INTERVAL".equals(scheduleType)) {
+                int intervalMin = (profile.getIntervalMinutes() != null && profile.getIntervalMinutes() > 0)
                         ? profile.getIntervalMinutes()
                         : 60;
-                OffsetDateTime lastRun = profile.getLastRunAt();
-                boolean shouldRun = (lastRun == null)
-                        || Duration.between(lastRun, nowPl.toOffsetDateTime()).toMinutes() >= intervalMins;
+                OffsetDateTime lastRun = lastIntervalTriggerByProfile.getOrDefault(
+                        profile.getId(),
+                        profile.getLastRunAt()
+                );
 
-                if (shouldRun && !stampKey.equals(lastTriggeredMinuteByProfile.get(profile.getId()))) {
-                    lastTriggeredMinuteByProfile.put(profile.getId(), stampKey);
+                if (lastRun == null || Duration.between(lastRun, nowOffset).toMinutes() >= intervalMin) {
+                    lastIntervalTriggerByProfile.put(profile.getId(), nowOffset);
                     executeProfileNow(profile.getId());
                 }
-            } else if ("WEEKLY".equals(type)) {
-                List<Integer> allowedDays = parseDayNumbers(profile.getCronDays());
-                if (allowedDays.contains(currentDayOfWeek) && matchesAnyTime(nowHm, profile.getCronTime())) {
-                    if (!stampKey.equals(lastTriggeredMinuteByProfile.get(profile.getId()))) {
-                        lastTriggeredMinuteByProfile.put(profile.getId(), stampKey);
-                        executeProfileNow(profile.getId());
-                    }
-                }
             } else {
-                // DAILY oraz MULTI_TIME (wiele godzin po przecinku, np. "08:00, 12:00, 16:00")
-                if (matchesAnyTime(nowHm, profile.getCronTime())) {
-                    if (!stampKey.equals(lastTriggeredMinuteByProfile.get(profile.getId()))) {
-                        lastTriggeredMinuteByProfile.put(profile.getId(), stampKey);
-                        executeProfileNow(profile.getId());
-                    }
+                String lastMinute = lastTriggeredMinuteByProfile.getOrDefault(profile.getId(), "");
+                if (!minuteKey.equals(lastMinute)
+                        && matchesScheduleExpression(profile.getCronTime(), nowHm, todayDow)) {
+                    lastTriggeredMinuteByProfile.put(profile.getId(), minuteKey);
+                    executeProfileNow(profile.getId());
                 }
             }
         }
     }
 
-    private boolean matchesAnyTime(String nowHm, String cronTimeRaw) {
-        if (cronTimeRaw == null || cronTimeRaw.isBlank()) return false;
-        for (String part : cronTimeRaw.split("[,;]")) {
-            if (nowHm.equals(part.trim())) {
+    /**
+     * Obsługuje reguły rozdzielane przecinkiem:
+     * - "8:00, 16:00"      -> codziennie o 08:00 i 16:00
+     * - "8:00/1"           -> w poniedziałki o 08:00
+     * - "16:00/2;5"        -> we wtorki i piątki o 16:00
+     */
+    private boolean matchesScheduleExpression(String rawExpr, String nowHm, int todayDow) {
+        if (rawExpr == null || rawExpr.isBlank()) {
+            return false;
+        }
+        for (String token : rawExpr.split(",")) {
+            String trimmed = token.trim();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            String[] parts = trimmed.split("/");
+            String normalizedTime = normalizeHm(parts[0].trim());
+            if (!nowHm.equals(normalizedTime)) {
+                continue;
+            }
+            if (parts.length == 1 || parts[1].isBlank()) {
                 return true;
+            }
+            String[] days = parts[1].trim().split(";");
+            for (String d : days) {
+                try {
+                    if (Integer.parseInt(d.trim()) == todayDow) {
+                        return true;
+                    }
+                } catch (NumberFormatException ignored) {
+                }
             }
         }
         return false;
     }
 
-    private List<Integer> parseDayNumbers(String raw) {
-        List<Integer> days = new ArrayList<>();
-        if (raw == null || raw.isBlank()) return days;
-        for (String part : raw.split(",")) {
-            try {
-                days.add(Integer.parseInt(part.trim()));
-            } catch (NumberFormatException ignored) {
-            }
+    private String normalizeHm(String rawTime) {
+        if (rawTime == null) return "";
+        String[] hm = rawTime.split(":");
+        if (hm.length != 2) return rawTime;
+        try {
+            int h = Integer.parseInt(hm[0].trim());
+            int m = Integer.parseInt(hm[1].trim());
+            return String.format("%02d:%02d", h, m);
+        } catch (NumberFormatException e) {
+            return rawTime;
         }
-        return days;
     }
 
     public ExecutionSummary executeProfileNow(Long profileId) {
@@ -161,21 +182,24 @@ public class TenderExecutionService {
                 .orElseThrow(() -> new IllegalArgumentException("Nie znaleziono profilu o ID: " + profileId));
 
         List<Long> epIds = parseIds(profile.getEndpointIds());
-        List<Long> catIds = parseIds(profile.getCategoryIds());
+        Map<Long, String> catModes = parseCategoryIdsWithModes(profile.getCategoryIds(), profile.getMatchMode());
+        List<Long> catIds = new ArrayList<>(catModes.keySet());
 
         String runSourceLabel = "CRON [" + profile.getName() + "]";
-        ExecutionSummary summary = executeSearch(epIds, catIds, profile.getMatchMode(), runSourceLabel);
+        ExecutionSummary summary = executeSearch(epIds, catIds, profile.getMatchMode(), catModes, runSourceLabel);
 
         String statusMsg = "Zapisano: " + summary.savedCount() + " (Pobrano: " + summary.totalFetched() + ")";
 
+        // Wysyłka wyłącznie, gdy przypisano konkretne konto SMTP oraz podano adresy odbiorców
+        Long smtpId = profile.getSmtpAccountId();
         List<String> emails = parseEmails(profile.getRecipientEmails());
-        if (!emails.isEmpty() && summary.fetchRunId() != null) {
+        if (smtpId != null && !emails.isEmpty() && summary.fetchRunId() != null) {
             try {
                 EmailDispatchResult mailRes = sendRunsToEmails(
                         List.of(summary.fetchRunId()),
                         emails,
                         "Raport Cron [" + profile.getName() + "] - Przetargi",
-                        profile.getSmtpAccountId()
+                        smtpId
                 );
                 statusMsg += " | Email: " + mailRes.message();
             } catch (Exception e) {
@@ -183,9 +207,11 @@ public class TenderExecutionService {
             }
         }
 
-        profile.setLastRunAt(OffsetDateTime.now(POLAND_ZONE));
+        OffsetDateTime nowPl = OffsetDateTime.now(POLAND_ZONE);
+        profile.setLastRunAt(nowPl);
         profile.setLastRunStatus(statusMsg);
         profileRepository.save(profile);
+        lastIntervalTriggerByProfile.put(profile.getId(), nowPl);
 
         return summary;
     }
@@ -196,7 +222,17 @@ public class TenderExecutionService {
             String matchMode,
             String sourceType
     ) {
-        boolean requireAllWords = "ALL".equalsIgnoreCase(matchMode);
+        return executeSearch(endpointIds, categoryIds, matchMode, null, sourceType);
+    }
+
+    public ExecutionSummary executeSearch(
+            List<Long> endpointIds,
+            List<Long> categoryIds,
+            String matchMode,
+            Map<Long, String> categoryMatchModes,
+            String sourceType
+    ) {
+        String fallbackMode = (matchMode != null && !matchMode.isBlank()) ? matchMode : "OR";
         List<ApiEndpoint> selectedEndpoints = endpointRepository.findAllById(
                 endpointIds != null ? endpointIds : List.of()
         );
@@ -252,6 +288,11 @@ public class TenderExecutionService {
                     List<String> categoryBreakdowns = new ArrayList<>();
 
                     for (KeywordCategory cat : selectedCategories) {
+                        String catMode = (categoryMatchModes != null && categoryMatchModes.containsKey(cat.getId()))
+                                ? categoryMatchModes.get(cat.getId())
+                                : fallbackMode;
+                        boolean requireAllWords = "ALL".equalsIgnoreCase(catMode) || "AND".equalsIgnoreCase(catMode);
+
                         int catScore = calculateCategoryScore(combinedText, cat, requireAllWords);
                         if (catScore > 0) {
                             totalScore += catScore;
@@ -446,7 +487,8 @@ public class TenderExecutionService {
                     String extId = firstNonNullString(m, "externalId", "id");
                     String title = firstNonNullString(m, "title", "name");
                     String desc = firstNonNullString(m, "description");
-                    result.add(new RawItem(extId, title, desc));
+                    String decoratedDesc = "Źródło: " + ep.getName() + "\n" + (desc != null ? desc : "");
+                    result.add(new RawItem(extId, title, decoratedDesc.trim()));
                 }
             }
         }
@@ -531,6 +573,10 @@ public class TenderExecutionService {
         return new ExcelExportResult(filename, base64, count);
     }
 
+    public EmailDispatchResult sendRunsToEmails(List<Long> runIds, List<String> emails, String subject) throws Exception {
+        return sendRunsToEmails(runIds, emails, subject, null);
+    }
+
     @SuppressWarnings("rawtypes")
     public EmailDispatchResult sendRunsToEmails(
             List<Long> runIds,
@@ -538,9 +584,14 @@ public class TenderExecutionService {
             String subject,
             Long smtpAccountId
     ) throws Exception {
+        if (smtpAccountId == null) {
+            throw new IllegalArgumentException("Nie wybrano konta SMTP.");
+        }
+        SmtpAccount smtpAccount = smtpAccountRepository.findById(smtpAccountId)
+                .orElseThrow(() -> new IllegalArgumentException("Nie znaleziono wybranego konta SMTP."));
+
         List<FetchRun> runs = fetchRunRepository.findAllById(runIds);
-        SmtpCredentials creds = resolveSmtpCredentials(smtpAccountId);
-        String payloadJson = buildWorkerExcelPayload(runs, emails, subject, creds);
+        String payloadJson = buildWorkerExcelPayload(runs, emails, subject, smtpAccount);
 
         HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build();
         HttpRequest req = HttpRequest.newBuilder()
@@ -564,43 +615,11 @@ public class TenderExecutionService {
         return new EmailDispatchResult(sent, message, base64, filename);
     }
 
-    private SmtpCredentials resolveSmtpCredentials(Long smtpAccountId) {
-        if (smtpAccountId != null) {
-            Optional<SmtpAccount> found = smtpAccountRepository.findById(smtpAccountId);
-            if (found.isPresent()) {
-                SmtpAccount acc = found.get();
-                return new SmtpCredentials(
-                        acc.getSmtpHost(),
-                        acc.getSmtpPort() != null ? acc.getSmtpPort() : 587,
-                        acc.getSmtpUsername(),
-                        acc.getSmtpPassword()
-                );
-            }
-        }
-        List<SmtpAccount> all = smtpAccountRepository.findAllByOrderByIdAsc();
-        if (!all.isEmpty()) {
-            SmtpAccount first = all.get(0);
-            return new SmtpCredentials(
-                    first.getSmtpHost(),
-                    first.getSmtpPort() != null ? first.getSmtpPort() : 587,
-                    first.getSmtpUsername(),
-                    first.getSmtpPassword()
-            );
-        }
-        CronConfig cfg = getOrCreateCronConfig();
-        return new SmtpCredentials(
-                cfg.getSmtpHost(),
-                cfg.getSmtpPort() != null ? cfg.getSmtpPort() : 587,
-                cfg.getSmtpUsername(),
-                cfg.getSmtpPassword()
-        );
-    }
-
     private String buildWorkerExcelPayload(
             List<FetchRun> runs,
             List<String> emails,
             String subject,
-            SmtpCredentials creds
+            SmtpAccount smtpAcc
     ) {
         Map<Long, Tender> uniqueTenders = new LinkedHashMap<>();
         Map<Long, String> runLabels = new LinkedHashMap<>();
@@ -644,18 +663,47 @@ public class TenderExecutionService {
             sb.append("]");
             sb.append(",\"subject\":\"").append(escapeJson(subject != null ? subject : "Raport przetargow")).append("\"");
 
-            if (creds != null) {
+            if (smtpAcc != null) {
+                String host = readStringProp(smtpAcc, "getSmtpHost", "getHost");
+                Integer port = readIntProp(smtpAcc, "getSmtpPort", "getPort");
+                String username = readStringProp(smtpAcc, "getSmtpUsername", "getUsername");
+                String password = readStringProp(smtpAcc, "getSmtpPassword", "getPassword");
+
                 sb.append(",\"smtp\":{")
-                        .append("\"host\":\"").append(escapeJson(creds.host())).append("\",")
-                        .append("\"port\":").append(creds.port()).append(",")
-                        .append("\"username\":\"").append(escapeJson(creds.username())).append("\",")
-                        .append("\"password\":\"").append(escapeJson(creds.password())).append("\"")
+                        .append("\"host\":\"").append(escapeJson(host)).append("\",")
+                        .append("\"port\":").append(port != null ? port : 587).append(",")
+                        .append("\"username\":\"").append(escapeJson(username)).append("\",")
+                        .append("\"password\":\"").append(escapeJson(password)).append("\"")
                         .append("}");
             }
         }
 
         sb.append("}");
         return sb.toString();
+    }
+
+    private String readStringProp(Object obj, String... methodNames) {
+        for (String name : methodNames) {
+            try {
+                Method m = obj.getClass().getMethod(name);
+                Object val = m.invoke(obj);
+                if (val != null) return val.toString();
+            } catch (Exception ignored) {
+            }
+        }
+        return "";
+    }
+
+    private Integer readIntProp(Object obj, String... methodNames) {
+        for (String name : methodNames) {
+            try {
+                Method m = obj.getClass().getMethod(name);
+                Object val = m.invoke(obj);
+                if (val instanceof Number n) return n.intValue();
+            } catch (Exception ignored) {
+            }
+        }
+        return 587;
     }
 
     @SuppressWarnings("rawtypes")
@@ -703,8 +751,21 @@ public class TenderExecutionService {
         String deadline = firstNonNullString(map, "submittingOffersDate", "deadline", "submissionDeadline");
         String rawDesc = firstNonNullString(map, "shortDescription", "description", "summary", "BT-24-Procedure");
 
+        // Wyciąganie lub budowanie bezpośredniego linku do przetargu
+        String tenderLink = firstNonNullString(map, "url", "link", "tenderUrl", "noticeUrl", "htmlUrl", "offerUrl");
+        if (tenderLink == null) {
+            String objectId = firstNonNullString(map, "objectId");
+            String pubNo = firstNonNullString(map, "publication-number");
+            if (objectId != null) {
+                tenderLink = "https://ezamowienia.gov.pl/mp-client/search/list/" + objectId.trim();
+            } else if (pubNo != null) {
+                tenderLink = "https://ted.europa.eu/pl/notice/-/detail/" + pubNo.trim();
+            }
+        }
+
         StringBuilder details = new StringBuilder();
         details.append("Źródło: ").append(sourceName).append("\n");
+        if (tenderLink != null) details.append("Link: ").append(tenderLink).append("\n");
         if (purchaser != null) details.append("Zamawiający: ").append(purchaser).append("\n");
         if (city != null || province != null) {
             details.append("Lokalizacja: ")
@@ -736,12 +797,33 @@ public class TenderExecutionService {
         List<Long> res = new ArrayList<>();
         if (raw == null || raw.isBlank()) return res;
         for (String part : raw.split(",")) {
+            String idPart = part.split(":")[0].trim();
             try {
-                res.add(Long.parseLong(part.trim()));
+                res.add(Long.parseLong(idPart));
             } catch (NumberFormatException ignored) {
             }
         }
         return res;
+    }
+
+    private Map<Long, String> parseCategoryIdsWithModes(String raw, String fallbackMode) {
+        Map<Long, String> map = new LinkedHashMap<>();
+        String def = (fallbackMode != null && !fallbackMode.isBlank()) ? fallbackMode : "OR";
+        if (raw == null || raw.isBlank()) return map;
+        for (String part : raw.split(",")) {
+            String trimmed = part.trim();
+            if (trimmed.isEmpty()) continue;
+            String[] pieces = trimmed.split(":");
+            try {
+                Long id = Long.parseLong(pieces[0].trim());
+                String mode = (pieces.length > 1 && !pieces[1].isBlank())
+                        ? pieces[1].trim().toUpperCase()
+                        : def;
+                map.put(id, mode);
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return map;
     }
 
     public List<String> parseEmails(String raw) {
@@ -764,7 +846,6 @@ public class TenderExecutionService {
                 .replace("\n", "\\n");
     }
 
-    public record SmtpCredentials(String host, int port, String username, String password) {}
     public record ParsedKeyword(String word, int weight, boolean excluded) {}
     public record RawItem(String externalId, String title, String description) {}
     public record SourceLog(String sourceName, boolean success, int savedCount, String message) {}

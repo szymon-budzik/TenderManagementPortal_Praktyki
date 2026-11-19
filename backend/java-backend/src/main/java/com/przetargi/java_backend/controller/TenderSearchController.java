@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/search")
@@ -46,6 +47,7 @@ public class TenderSearchController {
                 request.endpointIds(),
                 request.keywordCategoryIds(),
                 request.matchMode(),
+                request.categoryMatchModes(),
                 "MANUAL"
         ));
     }
@@ -53,6 +55,7 @@ public class TenderSearchController {
     public record SearchRunRequest(
             List<Long> endpointIds,
             List<Long> keywordCategoryIds,
-            String matchMode
+            String matchMode,
+            Map<Long, String> categoryMatchModes
     ) {}
 }

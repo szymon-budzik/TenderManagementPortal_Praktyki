@@ -7,6 +7,8 @@ from email.message import EmailMessage
 from typing import List, Optional
 from zoneinfo import ZoneInfo
 
+from urllib.parse import urljoin
+
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
@@ -125,18 +127,17 @@ def scrape_page(req: ScrapeRequest):
         seen_titles.add(key)
 
         link_tag = el if el.name == "a" else el.find("a", href=True)
-        href = link_tag["href"] if (link_tag and link_tag.has_attr("href")) else ""
+        raw_href = link_tag["href"] if (link_tag and link_tag.has_attr("href")) else ""
+        full_href = urljoin(req.url, raw_href) if raw_href else req.url
 
-        desc = f"Źródło (BeautifulSoup): {req.url}\n"
-        if href:
-            desc += f"Link: {href}\n"
+        desc = f"Link: {full_href}\n"
         if full_text and full_text != title_text:
             desc += f"Treść: {full_text[:700]}"
 
         items.append({
             "externalId": make_id("BS4", req.url + title_text),
             "title": title_text,
-            "description": desc.strip()
+            "description": f"Link: {req.url}\n" + "\n".join(desc_parts[:10])
         })
 
         if len(items) >= 100:

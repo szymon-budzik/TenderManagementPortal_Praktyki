@@ -9,11 +9,11 @@ export default function SearchView() {
 
   const [selectedEndpointIds, setSelectedEndpointIds] = useState([]);
   const [selectedCategoryIds, setSelectedCategoryIds] = useState([]);
-  const [matchMode, setMatchMode] = useState('ANY'); // 'ANY' = chociaż 1 słowo, 'ALL' = wszystkie słowa
+  // Osobny tryb OR / AND dla każdej kategorii: { [catId]: 'OR' | 'AND' }
+  const [categoryMatchModes, setCategoryMatchModes] = useState({});
 
   const [running, setRunning] = useState(false);
   const [runResult, setRunResult] = useState(null);
-  const [errorMsg, setErrorMsg] = useState('');
 
   useEffect(() => {
     const loadData = async () => {
@@ -28,9 +28,14 @@ export default function SearchView() {
         setEndpoints(epList);
         setCategories(kwList);
 
-        // Domyślnie zaznacz aktywne endpointy oraz wszystkie kategorie keywordsów
         setSelectedEndpointIds(epList.filter((e) => e.isActive).map((e) => e.id));
         setSelectedCategoryIds(kwList.map((k) => k.id));
+
+        const initialModes = {};
+        kwList.forEach((k) => {
+          initialModes[k.id] = 'OR';
+        });
+        setCategoryMatchModes(initialModes);
       } catch (err) {
         console.error('Błąd ładowania konfiguracji wyszukiwarki:', err);
       }
@@ -50,25 +55,30 @@ export default function SearchView() {
     );
   };
 
-  const handleRunFetch = async () => {
-    setErrorMsg('');
-    setRunResult(null);
+  const toggleCategoryMode = (e, catId) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setCategoryMatchModes((prev) => ({
+      ...prev,
+      [catId]: prev[catId] === 'AND' ? 'OR' : 'AND',
+    }));
+  };
 
-    if (selectedEndpointIds.length === 0) {
-      setErrorMsg('Zaznacz przynajmniej jeden endpoint, z którego mają zostać pobrane przetargi.');
-      return;
-    }
+  const handleRunFetch = async () => {
+    setRunResult(null);
+    if (selectedEndpointIds.length === 0) return;
 
     setRunning(true);
     try {
       const res = await api.post('/search/run', {
         endpointIds: selectedEndpointIds,
         keywordCategoryIds: selectedCategoryIds,
-        matchMode,
+        matchMode: 'OR',
+        categoryMatchModes,
       });
       setRunResult(res.data);
     } catch (err) {
-      setErrorMsg(err.response?.data?.message || 'Wystąpił błąd podczas uruchamiania pobierania.');
+      console.error('Błąd uruchamiania pobierania:', err);
     } finally {
       setRunning(false);
     }
@@ -76,32 +86,24 @@ export default function SearchView() {
 
   return (
     <div className="space-y-6 text-black">
-      {/* Górny pasek z przyciskiem uruchamiającym pobieranie */}
       <div className="bg-white p-6 rounded-xl border-2 border-blue-600 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h2 className="text-2xl font-extrabold text-black">Wyszukiwarka Przetargów</h2>
           <p className="text-sm font-medium text-black mt-1">
-            Wybierz źródła danych oraz kategorie słów kluczowych, a następnie uruchom pobieranie i analizę.
+            Wybierz źródła danych oraz kategorie słów kluczowych (ustaw OR/AND osobno dla każdej kategorii), a następnie uruchom pobieranie.
           </p>
         </div>
 
         <button
           type="button"
           onClick={handleRunFetch}
-          disabled={running}
-          className="flex items-center justify-center gap-2.5 px-6 py-3.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white font-extrabold rounded-xl shadow-sm transition cursor-pointer text-base shrink-0"
+          disabled={running || selectedEndpointIds.length === 0}
+          className="flex items-center justify-center gap-2.5 px-6 py-3.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-extrabold rounded-xl shadow-sm transition cursor-pointer text-base shrink-0"
         >
           {running ? <Loader2 size={20} className="animate-spin" /> : <Play size={20} />}
           {running ? 'Trwa pobieranie...' : 'Uruchom pobieranie'}
         </button>
       </div>
-
-      {/* Komunikaty błędów i raport po wykonaniu pobierania */}
-      {errorMsg && (
-        <div className="p-4 bg-red-100 border-2 border-red-600 rounded-xl text-black font-bold text-sm">
-          {errorMsg}
-        </div>
-      )}
 
       {runResult && (
         <div className="bg-white p-5 rounded-xl border-2 border-green-700 shadow-xs space-y-4">
@@ -130,7 +132,9 @@ export default function SearchView() {
             </div>
             <div className="p-3.5 bg-slate-100 border border-slate-400 rounded-lg">
               <div className="text-xs font-bold uppercase">Pominięto (0 pkt)</div>
-              <div className="text-2xl font-extrabold mt-1">{runResult.zeroScoreSkippedCount ?? 0}</div>
+              <div className="text-2xl font-extrabold mt-1">
+                {runResult.zeroScoreSkippedCount ?? 0}
+              </div>
             </div>
           </div>
 
@@ -231,14 +235,19 @@ export default function SearchView() {
         )}
       </div>
 
-      {/* SEKCJA 2: KEYWORDSY + REGUŁA DOPASOWANIA */}
+      {/* SEKCJA 2: KEYWORDSY Z PRZYCISKIEM OR/AND NA PROSTOKĄCIE KAŻDEJ KATEGORII */}
       <div className="bg-white p-6 rounded-xl border border-blue-200 shadow-xs space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-blue-100">
           <div className="flex items-center gap-2">
             <KeyRound size={20} className="text-blue-600" />
-            <h3 className="text-lg font-bold text-black">
-              2. Kategorie słów kluczowych (Keywordsy) i warunek zaliczenia
-            </h3>
+            <div>
+              <h3 className="text-lg font-bold text-black">
+                2. Kategorie słów kluczowych (Keywordsy)
+              </h3>
+              <p className="text-xs font-semibold text-black">
+                Kliknij przycisk OR / AND w prawym górnym rogu wybranej kategorii, aby ustawić warunek dopasowania.
+              </p>
+            </div>
           </div>
           <div className="flex gap-2">
             <button
@@ -258,65 +267,6 @@ export default function SearchView() {
           </div>
         </div>
 
-        {/* Wybór: chociaż 1 słowo vs wszystkie słowa */}
-        <div className="bg-blue-50/70 p-4 rounded-xl border border-blue-300 space-y-2">
-          <div className="text-xs font-extrabold uppercase text-black">
-            Warunek zaliczenia kategorii w ogłoszeniu:
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <label
-              className={`flex items-center gap-3 p-3 rounded-lg border-2 cursor-pointer ${
-                matchMode === 'ANY'
-                  ? 'bg-white border-blue-600 font-bold'
-                  : 'bg-white/70 border-blue-200'
-              }`}
-            >
-              <input
-                type="radio"
-                name="matchMode"
-                value="ANY"
-                checked={matchMode === 'ANY'}
-                onChange={() => setMatchMode('ANY')}
-                className="w-4 h-4 accent-blue-600"
-              />
-              <div>
-                <div className="text-sm font-bold text-black">
-                  Chociaż 1 słowo z kategorii (OR)
-                </div>
-                <div className="text-xs font-normal text-black">
-                  Wystarczy obecność dowolnego słowa kluczowego z danej kategorii.
-                </div>
-              </div>
-            </label>
-
-            <label
-              className={`flex items-center gap-3 p-3 rounded-lg border-2 cursor-pointer ${
-                matchMode === 'ALL'
-                  ? 'bg-white border-blue-600 font-bold'
-                  : 'bg-white/70 border-blue-200'
-              }`}
-            >
-              <input
-                type="radio"
-                name="matchMode"
-                value="ALL"
-                checked={matchMode === 'ALL'}
-                onChange={() => setMatchMode('ALL')}
-                className="w-4 h-4 accent-blue-600"
-              />
-              <div>
-                <div className="text-sm font-bold text-black">
-                  Wszystkie słowa z kategorii (AND)
-                </div>
-                <div className="text-xs font-normal text-black">
-                  W ogłoszeniu muszą wystąpić wszystkie słowa z danej kategorii.
-                </div>
-              </div>
-            </label>
-          </div>
-        </div>
-
-        {/* Lista kategorii keywordsów */}
         {categories.length === 0 ? (
           <p className="text-sm font-medium">Brak zdefiniowanych kategorii słów kluczowych.</p>
         ) : (
@@ -324,6 +274,7 @@ export default function SearchView() {
             {categories.map((cat) => {
               const checked = selectedCategoryIds.includes(cat.id);
               const parsedWords = parseKeywordsString(cat.keywords);
+              const mode = categoryMatchModes[cat.id] || 'OR';
 
               return (
                 <label
@@ -340,10 +291,30 @@ export default function SearchView() {
                     onChange={() => toggleCategory(cat.id)}
                     className="w-5 h-5 mt-0.5 accent-blue-600 cursor-pointer"
                   />
-                  <div className="flex-1">
-                    <div className="font-extrabold text-sm text-black">
-                      Nazwa kategorii: {cat.name}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="font-extrabold text-sm text-black truncate">
+                        {cat.name}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={(e) => toggleCategoryMode(e, cat.id)}
+                        title={
+                          mode === 'AND'
+                            ? 'AND: Wszystkie słowa z tej kategorii muszą wystąpić (kliknij, aby zmienić na OR)'
+                            : 'OR: Wystarczy chociaż 1 słowo z tej kategorii (kliknij, aby zmienić na AND)'
+                        }
+                        className={`px-2.5 py-0.5 rounded-md text-[11px] font-extrabold border-2 transition cursor-pointer shrink-0 ${
+                          mode === 'AND'
+                            ? 'bg-purple-200 hover:bg-purple-300 border-purple-700 text-black'
+                            : 'bg-blue-100 hover:bg-blue-200 border-blue-600 text-black'
+                        }`}
+                      >
+                        {mode}
+                      </button>
                     </div>
+
                     <div className="flex flex-wrap gap-1.5 mt-2">
                       {parsedWords.map((kw, idx) => (
                         <span

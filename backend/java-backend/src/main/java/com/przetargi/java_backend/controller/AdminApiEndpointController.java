@@ -74,7 +74,14 @@ public class AdminApiEndpointController {
             if ("SCRAPER".equalsIgnoreCase(ep.getHttpMethod())) {
                 String msg = executionService.testScraperConnection(ep);
                 long elapsed = System.currentTimeMillis() - start;
-                return ResponseEntity.ok(new TestResult(true, 200, elapsed, msg + " (" + elapsed + " ms)"));
+                String selectorInfo = (ep.getPayload() != null && !ep.getPayload().isBlank())
+                        ? ep.getPayload().trim()
+                        : "(domyślny automatyczny selektor + tabele Pandas)";
+                String details = "Tryb: SCRAPER (BeautifulSoup + Pandas)\n"
+                        + "Docelowy URL: " + ep.getUrl() + "\n"
+                        + "Selektor CSS: " + selectorInfo + "\n"
+                        + "Wynik: " + msg;
+                return ResponseEntity.ok(new TestResult(true, 200, elapsed, msg, details));
             }
 
             HttpClient client = HttpClient.newBuilder()
@@ -98,23 +105,48 @@ public class AdminApiEndpointController {
 
             HttpResponse<String> response = client.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofString());
             long elapsed = System.currentTimeMillis() - start;
-            boolean ok = response.statusCode() >= 200 && response.statusCode() < 300;
+            int status = response.statusCode();
+            boolean ok = status >= 200 && status < 300;
+            String contentType = response.headers().firstValue("content-type").orElse("nieznany");
+            String body = response.body() != null ? response.body().trim() : "";
+            String bodySnippet = body.length() > 1000
+                    ? body.substring(0, 1000) + "\n... [skrócono, łącznie " + body.length() + " znaków]"
+                    : (body.isEmpty() ? "(pusta treść odpowiedzi)" : body);
 
-            return ResponseEntity.ok(new TestResult(
-                    ok,
-                    response.statusCode(),
-                    elapsed,
-                    ok
-                            ? "Połączenie udane! Serwer odpowiedział kodem HTTP " + response.statusCode() + " w " + elapsed + " ms."
-                            : "Serwer odpowiedział błędem HTTP " + response.statusCode() + " (" + elapsed + " ms)."
-            ));
+            String message = ok
+                    ? "Połączenie udane! Serwer odpowiedział kodem HTTP " + status + " w " + elapsed + " ms."
+                    : "Serwer odrzucił żądanie kodem błędu HTTP " + status + " (" + elapsed + " ms).";
+
+            String details = "Metoda: " + ep.getHttpMethod() + "\n"
+                    + "Content-Type: " + contentType + "\n"
+                    + "Rozmiar odpowiedzi: " + body.length() + " znaków\n\n"
+                    + "--- Treść odpowiedzi serwera ---\n"
+                    + bodySnippet;
+
+            return ResponseEntity.ok(new TestResult(ok, status, elapsed, message, details));
         } catch (Exception e) {
             long elapsed = System.currentTimeMillis() - start;
+            String errType = e.getClass().getSimpleName();
+            String errMsg = e.getMessage() != null ? e.getMessage() : "Brak szczegółowego komunikatu wyjątku";
+            Throwable cause = e.getCause();
+            StringBuilder details = new StringBuilder();
+            details.append("Typ wyjątku: ").append(errType).append("\n");
+            details.append("Komunikat: ").append(errMsg).append("\n");
+            if (cause != null) {
+                details.append("Przyczyna źródłowa: ")
+                        .append(cause.getClass().getSimpleName())
+                        .append(": ")
+                        .append(cause.getMessage() != null ? cause.getMessage() : "brak opisu")
+                        .append("\n");
+            }
+            details.append("Docelowy URL: ").append(ep.getUrl());
+
             return ResponseEntity.ok(new TestResult(
                     false,
                     0,
                     elapsed,
-                    "Błąd połączenia z " + ep.getUrl() + ": " + e.getMessage()
+                    "Błąd połączenia (" + errType + "): " + errMsg,
+                    details.toString()
             ));
         }
     }
@@ -125,5 +157,5 @@ public class AdminApiEndpointController {
     }
 
     public record ErrorResponse(String message) {}
-    public record TestResult(boolean success, int statusCode, long responseTimeMs, String message) {}
+    public record TestResult(boolean success, int statusCode, long responseTimeMs, String message, String details) {}
 }

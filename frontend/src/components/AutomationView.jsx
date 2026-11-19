@@ -13,14 +13,30 @@ import {
   KeyRound,
   ArrowUpDown,
   Clock,
+  HelpCircle,
 } from 'lucide-react';
 
 function parseIdList(str) {
   if (!str) return [];
   return str
     .split(',')
-    .map((s) => Number(s.trim()))
+    .map((s) => Number(s.split(':')[0].trim()))
     .filter((n) => !Number.isNaN(n) && n > 0);
+}
+
+function parseCategoryModesMap(str, fallbackMode = 'OR') {
+  const def = fallbackMode === 'ALL' || fallbackMode === 'AND' ? 'AND' : 'OR';
+  const map = {};
+  if (!str) return map;
+  str.split(',').forEach((part) => {
+    const pieces = part.trim().split(':');
+    const id = Number(pieces[0]?.trim());
+    if (!Number.isNaN(id) && id > 0) {
+      const m = pieces[1]?.trim().toUpperCase();
+      map[id] = m === 'AND' || m === 'ALL' ? 'AND' : m === 'OR' || m === 'ANY' ? 'OR' : def;
+    }
+  });
+  return map;
 }
 
 function parseEmailTags(raw) {
@@ -31,15 +47,43 @@ function parseEmailTags(raw) {
     .filter(Boolean);
 }
 
-const DAYS_OF_WEEK = [
-  { id: '1', label: 'Pon' },
-  { id: '2', label: 'Wt' },
-  { id: '3', label: 'Śr' },
-  { id: '4', label: 'Czw' },
-  { id: '5', label: 'Pt' },
-  { id: '6', label: 'Sob' },
-  { id: '7', label: 'Nd' },
-];
+function parseScheduleTags(raw) {
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+const DAY_NAMES = {
+  1: 'Pon',
+  2: 'Wt',
+  3: 'Śr',
+  4: 'Czw',
+  5: 'Pt',
+  6: 'Sob',
+  7: 'Nd',
+};
+
+function formatSingleScheduleTag(token) {
+  const parts = token.split('/');
+  const rawTime = (parts[0] || '').trim();
+  const hm = rawTime.split(':');
+  const normTime =
+    hm.length === 2
+      ? `${hm[0].trim().padStart(2, '0')}:${hm[1].trim().padStart(2, '0')}`
+      : rawTime;
+
+  if (parts.length === 1 || !parts[1].trim()) {
+    return `${normTime} (Codziennie)`;
+  }
+  const days = parts[1]
+    .split(';')
+    .map((d) => DAY_NAMES[Number(d.trim())] || d.trim())
+    .filter(Boolean)
+    .join(', ');
+  return `${normTime} (${days})`;
+}
 
 export default function AutomationView() {
   const [profiles, setProfiles] = useState([]);
@@ -54,15 +98,14 @@ export default function AutomationView() {
   const [profileForm, setProfileForm] = useState({
     name: '',
     enabled: true,
-    scheduleType: 'DAILY',
-    cronTime: '08:00',
+    scheduleType: 'SCHEDULE', // 'SCHEDULE' | 'INTERVAL'
+    cronTime: '8:00, 16:00',
     intervalMinutes: 60,
-    daysOfWeek: ['1', '2', '3', '4', '5'],
-    matchMode: 'ANY',
     selectedEndpointIds: [],
     selectedCategoryIds: [],
+    categoryModes: {}, // { [catId]: 'OR' | 'AND' }
     recipientEmails: '',
-    smtpAccountId: '',
+    smtpAccountId: '', // '' = Brak SMTP
   });
 
   const [profileSort, setProfileSort] = useState({ key: 'id', dir: 'asc' });
@@ -92,7 +135,7 @@ export default function AutomationView() {
         const profRes = await api.get('/automation/profiles');
         setProfiles(profRes.data || []);
       } catch {
-        // Ciche odświeżanie statusu profili w tle co 10s
+        // Ciche odświeżanie w tle co 10s
       }
     }, 10000);
 
@@ -104,34 +147,29 @@ export default function AutomationView() {
     setProfileForm({
       name: '',
       enabled: true,
-      scheduleType: 'DAILY',
-      cronTime: '08:00',
+      scheduleType: 'SCHEDULE',
+      cronTime: '8:00, 16:00',
       intervalMinutes: 60,
-      daysOfWeek: ['1', '2', '3', '4', '5'],
-      matchMode: 'ANY',
       selectedEndpointIds: [],
       selectedCategoryIds: [],
+      categoryModes: {},
       recipientEmails: '',
-      smtpAccountId: smtpAccounts[0]?.id ? String(smtpAccounts[0].id) : '',
+      smtpAccountId: '',
     });
   };
 
   const handleStartEditProfile = (p) => {
     setEditingProfileId(p.id);
-    const days = p.daysOfWeek
-      ? p.daysOfWeek.split(',').map((d) => d.trim()).filter(Boolean)
-      : ['1', '2', '3', '4', '5'];
-
+    const isInterval = (p.scheduleType || '').toUpperCase() === 'INTERVAL';
     setProfileForm({
       name: p.name || '',
       enabled: Boolean(p.enabled),
-      scheduleType: p.scheduleType || 'DAILY',
-      cronTime: p.cronTime || '08:00',
+      scheduleType: isInterval ? 'INTERVAL' : 'SCHEDULE',
+      cronTime: p.cronTime || '8:00',
       intervalMinutes: p.intervalMinutes || 60,
-      daysOfWeek: days,
-      matchMode: p.matchMode || 'ANY',
       selectedEndpointIds: parseIdList(p.endpointIds),
       selectedCategoryIds: parseIdList(p.categoryIds),
+      categoryModes: parseCategoryModesMap(p.categoryIds, p.matchMode),
       recipientEmails: p.recipientEmails || '',
       smtpAccountId: p.smtpAccountId ? String(p.smtpAccountId) : '',
     });
@@ -155,14 +193,22 @@ export default function AutomationView() {
     }));
   };
 
-  const toggleDayOfWeek = (dayId) => {
-    setProfileForm((prev) => {
-      const exists = prev.daysOfWeek.includes(dayId);
-      const next = exists
-        ? prev.daysOfWeek.filter((d) => d !== dayId)
-        : [...prev.daysOfWeek, dayId];
-      return { ...prev, daysOfWeek: next.length > 0 ? next : ['1'] };
-    });
+  const toggleFormCategoryMode = (e, catId) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setProfileForm((prev) => ({
+      ...prev,
+      categoryModes: {
+        ...prev.categoryModes,
+        [catId]: prev.categoryModes[catId] === 'AND' ? 'OR' : 'AND',
+      },
+    }));
+  };
+
+  const removeScheduleTag = (indexToRemove) => {
+    const tags = parseScheduleTags(profileForm.cronTime);
+    const next = tags.filter((_, idx) => idx !== indexToRemove).join(', ');
+    setProfileForm({ ...profileForm, cronTime: next });
   };
 
   const removeProfileEmailTag = (indexToRemove) => {
@@ -181,18 +227,24 @@ export default function AutomationView() {
       return;
     }
 
+    const serializedCategories = profileForm.selectedCategoryIds
+      .map((id) => `${id}:${profileForm.categoryModes[id] || 'OR'}`)
+      .join(',');
+
+    const hasSmtp = Boolean(profileForm.smtpAccountId);
+
     const payload = {
       name: profileForm.name.trim(),
       enabled: profileForm.enabled,
       scheduleType: profileForm.scheduleType,
-      cronTime: profileForm.cronTime.trim() || '08:00',
-      intervalMinutes: Number(profileForm.intervalMinutes) || 60,
-      daysOfWeek: profileForm.daysOfWeek.join(','),
-      matchMode: profileForm.matchMode,
+      cronTime: profileForm.cronTime.trim() || '8:00',
+      intervalMinutes: Math.max(1, Number(profileForm.intervalMinutes) || 60),
+      daysOfWeek: '',
+      matchMode: 'OR',
       endpointIds: profileForm.selectedEndpointIds.join(','),
-      categoryIds: profileForm.selectedCategoryIds.join(','),
-      recipientEmails: profileForm.recipientEmails.trim(),
-      smtpAccountId: profileForm.smtpAccountId ? Number(profileForm.smtpAccountId) : null,
+      categoryIds: serializedCategories,
+      recipientEmails: hasSmtp ? profileForm.recipientEmails.trim() : '',
+      smtpAccountId: hasSmtp ? Number(profileForm.smtpAccountId) : null,
     };
 
     try {
@@ -248,24 +300,6 @@ export default function AutomationView() {
     });
   };
 
-  const formatScheduleDescription = (p) => {
-    const type = p.scheduleType || 'DAILY';
-    if (type === 'INTERVAL') {
-      return `Co ${p.intervalMinutes || 60} min`;
-    }
-    if (type === 'MULTI_TIME') {
-      return `Godziny: ${p.cronTime}`;
-    }
-    if (type === 'WEEKLY') {
-      const dayLabels = (p.daysOfWeek || '1,2,3,4,5')
-        .split(',')
-        .map((id) => DAYS_OF_WEEK.find((d) => d.id === id.trim())?.label || id)
-        .join(', ');
-      return `${dayLabels} o ${p.cronTime}`;
-    }
-    return `Codziennie o ${p.cronTime}`;
-  };
-
   const toggleSort = (key) => {
     setProfileSort((prev) => ({
       key,
@@ -291,7 +325,9 @@ export default function AutomationView() {
     return copy;
   }, [profiles, profileSort]);
 
+  const scheduleTags = parseScheduleTags(profileForm.cronTime);
   const profileEmailTags = parseEmailTags(profileForm.recipientEmails);
+  const isNoSmtpSelected = !profileForm.smtpAccountId;
 
   return (
     <div className="space-y-6 text-black">
@@ -313,11 +349,10 @@ export default function AutomationView() {
           Automatyzacja — Profile Harmonogramu (Cron)
         </h2>
         <p className="text-sm font-medium text-black mt-1">
-          Twórz dedykowane profile (np. dla firmy IT, budowlanej) z własnymi endpointami, kategoriami, harmonogramem Crona i przypisanym kontem SMTP.
+          Twórz dedykowane profile (np. dla firmy IT, budowlanej) z własnymi endpointami, kategoriami (OR/AND), harmonogramem i opcjonalnym kontem SMTP.
         </p>
       </div>
 
-      {/* KREATOR I OBSŁUGA PROFILI AUTOMATYZACJI */}
       <div className="bg-white p-6 rounded-xl border-2 border-blue-600 shadow-xs space-y-6">
         <div className="flex items-center justify-between border-b border-blue-100 pb-4">
           <div className="flex items-center gap-2.5">
@@ -327,7 +362,7 @@ export default function AutomationView() {
                 Kreator i Obsługa Profili Automatyzacji (Cron)
               </h3>
               <p className="text-xs font-semibold text-black">
-                Przypisz do profilu endpointy, kategorie, tryb aktywacji Crona, odbiorców e-mail oraz konto SMTP.
+                Wybierz tryb harmonogramu, konto SMTP (lub Brak SMTP) oraz przypisz endpointy i kategorie.
               </p>
             </div>
           </div>
@@ -347,8 +382,9 @@ export default function AutomationView() {
           onSubmit={handleSaveProfile}
           className="bg-slate-50 p-5 rounded-xl border border-blue-200 space-y-5"
         >
+          {/* Wiersz 1: Nazwa profilu, 2 tryby Crona, Konto SMTP */}
           <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-start">
-            <div className="md:col-span-3">
+            <div className="md:col-span-4">
               <label className="block text-xs font-bold uppercase mb-1">Nazwa profilu</label>
               <input
                 type="text"
@@ -360,7 +396,7 @@ export default function AutomationView() {
               />
             </div>
 
-            <div className="md:col-span-3">
+            <div className="md:col-span-4">
               <label className="block text-xs font-bold uppercase mb-1">
                 Tryb harmonogramu Crona
               </label>
@@ -371,26 +407,12 @@ export default function AutomationView() {
                 }
                 className="w-full px-3 py-2 border border-blue-300 rounded-lg bg-white text-black font-bold text-xs"
               >
-                <option value="DAILY">Codziennie o wybranej godzinie</option>
-                <option value="MULTI_TIME">Kilka razy dziennie (lista godzin)</option>
+                <option value="SCHEDULE">Harmonogram (godziny / dni tygodnia)</option>
                 <option value="INTERVAL">Interwał czasowy (co X minut)</option>
-                <option value="WEEKLY">Wybrane dni tygodnia o godzinie</option>
               </select>
             </div>
 
-            <div className="md:col-span-3">
-              <label className="block text-xs font-bold uppercase mb-1">Warunek dopasowania</label>
-              <select
-                value={profileForm.matchMode}
-                onChange={(e) => setProfileForm({ ...profileForm, matchMode: e.target.value })}
-                className="w-full px-3 py-2 border border-blue-300 rounded-lg bg-white text-black font-semibold text-xs"
-              >
-                <option value="ANY">Chociaż 1 słowo z kategorii (OR)</option>
-                <option value="ALL">Wszystkie słowa z kategorii (AND)</option>
-              </select>
-            </div>
-
-            <div className="md:col-span-3">
+            <div className="md:col-span-4">
               <label className="block text-xs font-bold uppercase mb-1">
                 Konto SMTP dla profilu
               </label>
@@ -401,7 +423,7 @@ export default function AutomationView() {
                 }
                 className="w-full px-3 py-2 border border-blue-300 rounded-lg bg-white text-black font-semibold text-xs"
               >
-                <option value="">Domyślne konto SMTP</option>
+                <option value="">Brak SMTP</option>
                 {smtpAccounts.map((acc) => (
                   <option key={acc.id} value={acc.id}>
                     {acc.name} ({acc.smtpUsername || acc.username})
@@ -411,121 +433,131 @@ export default function AutomationView() {
             </div>
           </div>
 
+          {/* Wiersz 2: Parametry czasu Crona (z ikonką "?" i szarymi tagami) + E-maile */}
           <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-start bg-white p-4 rounded-xl border border-blue-200">
-            <div className="md:col-span-5 space-y-2">
-              <div className="flex items-center gap-1.5 text-xs font-extrabold uppercase text-blue-700">
-                <Clock size={15} />
-                Parametry czasu aktywacji Crona
-              </div>
-
-              {profileForm.scheduleType === 'DAILY' && (
+            <div className="md:col-span-6 space-y-2">
+              {profileForm.scheduleType === 'INTERVAL' ? (
                 <div>
-                  <label className="block text-xs font-bold mb-1">Godzina uruchomienia</label>
-                  <input
-                    type="time"
-                    value={profileForm.cronTime.split(',')[0].trim() || '08:00'}
-                    onChange={(e) =>
-                      setProfileForm({ ...profileForm, cronTime: e.target.value })
-                    }
-                    className="px-3.5 py-2 border border-blue-300 rounded-lg bg-white text-black font-bold"
-                  />
+                  <div className="flex items-center gap-1.5 text-xs font-extrabold uppercase text-blue-700 mb-1.5">
+                    <Clock size={15} />
+                    Uruchamiaj cyklicznie co (liczba minut):
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min="1"
+                      required
+                      value={profileForm.intervalMinutes}
+                      onChange={(e) =>
+                        setProfileForm({
+                          ...profileForm,
+                          intervalMinutes:
+                            e.target.value === '' ? '' : Math.max(1, Number(e.target.value)),
+                        })
+                      }
+                      placeholder="np. 15"
+                      className="w-36 px-3.5 py-2 border border-blue-300 rounded-lg bg-white text-black font-bold text-sm"
+                    />
+                    <span className="text-xs font-extrabold text-black">minut</span>
+                  </div>
                 </div>
-              )}
-
-              {profileForm.scheduleType === 'MULTI_TIME' && (
+              ) : (
                 <div>
-                  <label className="block text-xs font-bold mb-1">
-                    Godziny uruchomienia (po przecinku, format HH:MM)
-                  </label>
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <Clock size={15} className="text-blue-700" />
+                    <label className="text-xs font-extrabold uppercase text-blue-700">
+                      Harmonogram (godziny i opcjonalnie dni tygodnia)
+                    </label>
+
+                    {/* Ikonka "?" z chmurką wyjaśniającą składnię po najechaniu */}
+                    <div className="relative group inline-flex items-center">
+                      <HelpCircle
+                        size={16}
+                        className="text-blue-600 hover:text-blue-800 cursor-help"
+                      />
+                      <div className="hidden group-hover:block absolute left-0 top-6 z-40 w-80 p-3.5 bg-slate-900 text-white text-xs rounded-xl shadow-xl border border-blue-400 space-y-1.5 leading-relaxed">
+                        <div className="font-extrabold text-blue-300 uppercase text-[11px]">
+                          Jak wpisywać harmonogram?
+                        </div>
+                        <div>
+                          <span className="font-mono font-bold text-amber-300">8:00, 16:00</span> — codziennie o 08:00 i 16:00
+                        </div>
+                        <div>
+                          <span className="font-mono font-bold text-amber-300">8:00/1</span> — w każdy poniedziałek o 08:00
+                        </div>
+                        <div>
+                          <span className="font-mono font-bold text-amber-300">16:00/2;5</span> — we wtorki i piątki o 16:00
+                        </div>
+                        <div className="pt-1 border-t border-slate-700 text-[11px] text-slate-300">
+                          Dni tygodnia: <b>1</b> Pon, <b>2</b> Wt, <b>3</b> Śr, <b>4</b> Czw, <b>5</b> Pt, <b>6</b> Sob, <b>7</b> Nd. Reguły rozdzielaj przecinkiem.
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
                   <input
                     type="text"
+                    required
                     value={profileForm.cronTime}
                     onChange={(e) =>
                       setProfileForm({ ...profileForm, cronTime: e.target.value })
                     }
-                    placeholder="np. 08:00, 12:30, 16:00"
-                    className="w-full px-3.5 py-2 border border-blue-300 rounded-lg bg-white text-black font-mono text-xs font-bold"
+                    placeholder="np. 8:00, 16:00 lub 8:00/1, 16:00/2;5"
+                    className="w-full px-3.5 py-2 border border-blue-300 rounded-lg bg-white text-black font-mono text-sm"
                   />
-                </div>
-              )}
 
-              {profileForm.scheduleType === 'INTERVAL' && (
-                <div>
-                  <label className="block text-xs font-bold mb-1">
-                    Uruchamiaj cyklicznie co:
-                  </label>
-                  <select
-                    value={profileForm.intervalMinutes}
-                    onChange={(e) =>
-                      setProfileForm({
-                        ...profileForm,
-                        intervalMinutes: Number(e.target.value),
-                      })
-                    }
-                    className="w-full px-3.5 py-2 border border-blue-300 rounded-lg bg-white text-black font-bold text-xs"
-                  >
-                    <option value={5}>Co 5 minut</option>
-                    <option value={15}>Co 15 minut</option>
-                    <option value={30}>Co 30 minut</option>
-                    <option value={60}>Co 1 godzinę (60 min)</option>
-                    <option value={120}>Co 2 godziny (120 min)</option>
-                    <option value={240}>Co 4 godziny (240 min)</option>
-                    <option value={360}>Co 6 godzin (360 min)</option>
-                    <option value={720}>Co 12 godzin (720 min)</option>
-                  </select>
-                </div>
-              )}
-
-              {profileForm.scheduleType === 'WEEKLY' && (
-                <div className="space-y-2">
-                  <div className="flex flex-wrap gap-1.5">
-                    {DAYS_OF_WEEK.map((d) => {
-                      const active = profileForm.daysOfWeek.includes(d.id);
-                      return (
-                        <button
-                          key={d.id}
-                          type="button"
-                          onClick={() => toggleDayOfWeek(d.id)}
-                          className={`px-2.5 py-1 rounded-lg text-xs font-extrabold border cursor-pointer ${
-                            active
-                              ? 'bg-blue-600 border-blue-800 text-white'
-                              : 'bg-slate-100 border-slate-300 text-black'
-                          }`}
+                  {scheduleTags.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      {scheduleTags.map((tag, idx) => (
+                        <span
+                          key={idx}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-200 border border-slate-400 rounded-md text-xs font-bold text-black"
                         >
-                          {d.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-bold">Godzina:</span>
-                    <input
-                      type="time"
-                      value={profileForm.cronTime.split(',')[0].trim() || '08:00'}
-                      onChange={(e) =>
-                        setProfileForm({ ...profileForm, cronTime: e.target.value })
-                      }
-                      className="px-3 py-1.5 border border-blue-300 rounded-lg bg-white text-black font-bold text-xs"
-                    />
-                  </div>
+                          <Clock size={12} className="text-slate-700" />
+                          {formatSingleScheduleTag(tag)}
+                          <button
+                            type="button"
+                            onClick={() => removeScheduleTag(idx)}
+                            className="hover:text-red-700 font-extrabold cursor-pointer"
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
 
-            <div className="md:col-span-7">
-              <label className="block text-xs font-bold uppercase mb-1">
-                Odbiorcy e-mail dla profilu (rozdzielaj przecinkiem)
+            {/* Odbiorcy e-mail: zaciemnione gdy Brak SMTP, opcjonalne gdy wybrane SMTP */}
+            <div className="md:col-span-6">
+              <label
+                className={`block text-xs font-bold uppercase mb-1 ${
+                  isNoSmtpSelected ? 'text-slate-400' : 'text-black'
+                }`}
+              >
+                Odbiorcy e-mail (opcjonalnie, rozdzielaj przecinkiem)
               </label>
               <input
                 type="text"
-                value={profileForm.recipientEmails}
+                disabled={isNoSmtpSelected}
+                value={isNoSmtpSelected ? '' : profileForm.recipientEmails}
                 onChange={(e) =>
                   setProfileForm({ ...profileForm, recipientEmails: e.target.value })
                 }
-                placeholder="np. biuro@firma.pl, przetargi@firma.pl"
-                className="w-full px-3.5 py-2 border border-blue-300 rounded-lg bg-white text-black text-sm font-mono"
+                placeholder={
+                  isNoSmtpSelected
+                    ? 'Wybrano Brak SMTP — wysyłka e-mail wyłączona'
+                    : 'np. biuro@firma.pl, przetargi@firma.pl (może zostać puste)'
+                }
+                className={`w-full px-3.5 py-2 border rounded-lg text-sm font-mono transition ${
+                  isNoSmtpSelected
+                    ? 'bg-slate-200 border-slate-300 text-slate-500 cursor-not-allowed'
+                    : 'bg-white border-blue-300 text-black'
+                }`}
               />
-              {profileEmailTags.length > 0 && (
+              {!isNoSmtpSelected && profileEmailTags.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 mt-2">
                   {profileEmailTags.map((email, idx) => (
                     <span
@@ -548,6 +580,7 @@ export default function AutomationView() {
             </div>
           </div>
 
+          {/* Wiersz 3: Wybór Endpointów i Kategorii (z przyciskiem OR/AND na prostokącie kategorii) */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="bg-white p-4 rounded-xl border border-blue-200 space-y-2.5">
               <div className="flex items-center justify-between">
@@ -578,7 +611,7 @@ export default function AutomationView() {
                 </div>
               </div>
 
-              <div className="max-h-40 overflow-y-auto space-y-1.5 pr-1">
+              <div className="max-h-44 overflow-y-auto space-y-1.5 pr-1">
                 {endpoints.length === 0 ? (
                   <p className="text-xs text-black">Brak dostępnych endpointów.</p>
                 ) : (
@@ -616,7 +649,7 @@ export default function AutomationView() {
               <div className="flex items-center justify-between">
                 <span className="text-xs font-extrabold uppercase flex items-center gap-1.5">
                   <KeyRound size={15} className="text-blue-600" />
-                  Przypisz Kategorie Słów Kluczowych ({profileForm.selectedCategoryIds.length})
+                  Przypisz Kategorie ({profileForm.selectedCategoryIds.length}) — kliknij OR/AND
                 </span>
                 <div className="flex gap-2">
                   <button
@@ -641,16 +674,17 @@ export default function AutomationView() {
                 </div>
               </div>
 
-              <div className="max-h-40 overflow-y-auto space-y-1.5 pr-1">
+              <div className="max-h-44 overflow-y-auto space-y-1.5 pr-1">
                 {categories.length === 0 ? (
                   <p className="text-xs text-black">Brak zdefiniowanych kategorii.</p>
                 ) : (
                   categories.map((cat) => {
                     const checked = profileForm.selectedCategoryIds.includes(cat.id);
+                    const mode = profileForm.categoryModes[cat.id] || 'OR';
                     return (
                       <label
                         key={cat.id}
-                        className={`flex items-center justify-between p-2 rounded-lg border text-xs cursor-pointer ${
+                        className={`flex items-center justify-between gap-2 p-2 rounded-lg border text-xs cursor-pointer ${
                           checked
                             ? 'bg-blue-50 border-blue-500 font-bold'
                             : 'bg-white border-blue-100 hover:bg-slate-50'
@@ -665,6 +699,23 @@ export default function AutomationView() {
                           />
                           <span className="truncate">{cat.name}</span>
                         </div>
+
+                        <button
+                          type="button"
+                          onClick={(e) => toggleFormCategoryMode(e, cat.id)}
+                          title={
+                            mode === 'AND'
+                              ? 'AND: Wszystkie słowa z kategorii (kliknij, aby zmienić na OR)'
+                              : 'OR: Min. 1 słowo z kategorii (kliknij, aby zmienić na AND)'
+                          }
+                          className={`px-2 py-0.5 rounded text-[11px] font-extrabold border-2 transition cursor-pointer shrink-0 ${
+                            mode === 'AND'
+                              ? 'bg-purple-200 hover:bg-purple-300 border-purple-700 text-black'
+                              : 'bg-blue-100 hover:bg-blue-200 border-blue-600 text-black'
+                          }`}
+                        >
+                          {mode}
+                        </button>
                       </label>
                     );
                   })
@@ -694,6 +745,7 @@ export default function AutomationView() {
           </div>
         </form>
 
+        {/* Tabela utworzonych profili */}
         <div className="rounded-xl border border-blue-200 overflow-hidden">
           <table className="w-full text-left border-collapse text-sm">
             <thead>
@@ -744,26 +796,27 @@ export default function AutomationView() {
               ) : (
                 sortedProfiles.map((p) => {
                   const epIds = parseIdList(p.endpointIds);
-                  const catIds = parseIdList(p.categoryIds);
+                  const catModesMap = parseCategoryModesMap(p.categoryIds, p.matchMode);
+                  const catIds = Object.keys(catModesMap).map(Number);
+
                   const epNames = endpoints
                     .filter((e) => epIds.includes(e.id))
                     .map((e) => e.name);
-                  const catNames = categories
+                  const catLabels = categories
                     .filter((c) => catIds.includes(c.id))
-                    .map((c) => c.name);
-                  const assignedSmtp = smtpAccounts.find(
-                    (s) => Number(s.id) === Number(p.smtpAccountId)
-                  );
+                    .map((c) => `${c.name} (${catModesMap[c.id] || 'OR'})`);
+
+                  const assignedSmtp = p.smtpAccountId
+                    ? smtpAccounts.find((s) => Number(s.id) === Number(p.smtpAccountId))
+                    : null;
                   const emailTags = parseEmailTags(p.recipientEmails);
+                  const isInterval = (p.scheduleType || '').toUpperCase() === 'INTERVAL';
+                  const rowScheduleTags = parseScheduleTags(p.cronTime);
 
                   return (
                     <tr key={p.id} className="hover:bg-blue-50/40">
                       <td className="p-3.5 align-top">
                         <div className="font-extrabold text-black text-base">{p.name}</div>
-                        <div className="text-[11px] font-semibold text-black mt-0.5">
-                          Dopasowanie:{' '}
-                          {p.matchMode === 'ALL' ? 'Wszystkie słowa (AND)' : 'Min. 1 słowo (OR)'}
-                        </div>
                         {p.lastRunAt && (
                           <div className="text-[11px] text-blue-800 font-semibold mt-1">
                             Ostatnio: {new Date(p.lastRunAt).toLocaleString('pl-PL')} ({p.lastRunStatus})
@@ -771,10 +824,23 @@ export default function AutomationView() {
                         )}
                       </td>
 
-                      <td className="p-3.5 font-mono font-extrabold text-xs align-top">
-                        <span className="px-2.5 py-1 bg-blue-50 border border-blue-300 rounded-md inline-block">
-                          {formatScheduleDescription(p)}
-                        </span>
+                      <td className="p-3.5 align-top">
+                        {isInterval ? (
+                          <span className="px-2.5 py-1 bg-slate-200 border border-slate-400 rounded-md text-xs font-extrabold inline-block">
+                            Co {p.intervalMinutes || 60} min
+                          </span>
+                        ) : (
+                          <div className="flex flex-wrap gap-1">
+                            {rowScheduleTags.map((t, idx) => (
+                              <span
+                                key={idx}
+                                className="px-2 py-0.5 bg-slate-200 border border-slate-400 rounded text-[11px] font-bold text-black"
+                              >
+                                {formatSingleScheduleTag(t)}
+                              </span>
+                            ))}
+                          </div>
+                        )}
                       </td>
 
                       <td className="p-3.5 align-top space-y-1.5 text-xs">
@@ -783,16 +849,16 @@ export default function AutomationView() {
                           <span>{epNames.join(', ') || 'Brak'}</span>
                         </div>
                         <div>
-                          <span className="font-extrabold">Kategorie ({catNames.length}): </span>
-                          <span>{catNames.join(', ') || 'Brak'}</span>
+                          <span className="font-extrabold">Kategorie ({catLabels.length}): </span>
+                          <span>{catLabels.join(', ') || 'Brak'}</span>
                         </div>
                       </td>
 
                       <td className="p-3.5 text-xs align-top space-y-1.5">
                         <div className="text-[11px] font-extrabold text-blue-800">
-                          SMTP: {assignedSmtp ? assignedSmtp.name : 'Domyślne'}
+                          SMTP: {assignedSmtp ? assignedSmtp.name : 'Brak SMTP'}
                         </div>
-                        {emailTags.length > 0 ? (
+                        {assignedSmtp && emailTags.length > 0 ? (
                           <div className="flex flex-wrap gap-1">
                             {emailTags.map((em, i) => (
                               <span
@@ -804,7 +870,7 @@ export default function AutomationView() {
                             ))}
                           </div>
                         ) : (
-                          <span>—</span>
+                          <span className="text-slate-500">—</span>
                         )}
                       </td>
 
@@ -812,7 +878,7 @@ export default function AutomationView() {
                         <button
                           type="button"
                           onClick={() => handleToggleProfileEnabled(p)}
-                          className={`px-3.5 py-1.5 rounded-lg text-xs font-extrabold border-2 transition cursor-pointer ${
+                          className={`w-28 text-center py-1.5 rounded-lg text-xs font-extrabold border-2 transition cursor-pointer ${
                             p.enabled
                               ? 'bg-green-400 hover:bg-green-500 border-green-800 text-black'
                               : 'bg-red-400 hover:bg-red-500 border-red-800 text-black'

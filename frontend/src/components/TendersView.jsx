@@ -1,7 +1,15 @@
 import { useState, useEffect, useMemo } from 'react';
 import api from '../api';
 import ConfirmModal from './ConfirmModal';
-import { Search, RotateCcw, Trash2, Eye, X, ArrowUpDown } from 'lucide-react';
+import {
+  Search,
+  RotateCcw,
+  Trash2,
+  Eye,
+  X,
+  ArrowUpDown,
+  ExternalLink,
+} from 'lucide-react';
 
 const STATUSES = ['NEW', 'INTERESTED'];
 const PAGE_SIZE = 10;
@@ -16,6 +24,47 @@ export function getTenderScoreDisplay(tender) {
     }
   }
   return `${tender?.score ?? 0} pkt`;
+}
+
+function getTenderScoreEntries(tender) {
+  const raw = getTenderScoreDisplay(tender);
+  if (!raw || raw.endsWith(' pkt')) return [];
+  return raw
+    .split('/')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function getTenderSource(tender) {
+  if (!tender?.description) return 'Nieznane';
+  const line = tender.description
+    .split('\n')
+    .find((l) => l.trim().toLowerCase().startsWith('źródło'));
+  if (!line) return 'Nieznane';
+  const idx = line.indexOf(':');
+  return idx > 0 ? line.substring(idx + 1).trim() : line.trim();
+}
+
+function getTenderLink(tender) {
+  if (tender?.description) {
+    const linkLine = tender.description
+      .split('\n')
+      .find((l) => l.trim().toLowerCase().startsWith('link:'));
+    if (linkLine) {
+      const url = linkLine.substring(linkLine.indexOf(':') + 1).trim();
+      if (url.startsWith('http://') || url.startsWith('https://')) {
+        return url;
+      }
+    }
+    const urlMatch = tender.description.match(/https?:\/\/[^\s]+/);
+    if (urlMatch) {
+      return urlMatch[0];
+    }
+  }
+  if (tender?.externalId && tender.externalId.startsWith('ocds-')) {
+    return `https://ezamowienia.gov.pl/mp-client/search/list/${tender.externalId}`;
+  }
+  return null;
 }
 
 function parseCategoryScoreMap(tender) {
@@ -43,10 +92,12 @@ function parseCategoryScoreMap(tender) {
 export default function TendersView() {
   const [allTenders, setAllTenders] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [endpoints, setEndpoints] = useState([]);
   const [sortConfig, setSortConfig] = useState({ key: 'publicationDate', dir: 'desc' });
   const [confirmDialog, setConfirmDialog] = useState(null);
 
   const [search, setSearch] = useState('');
+  const [sourceFilter, setSourceFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
   const [minCategoryScore, setMinCategoryScore] = useState('');
@@ -57,25 +108,38 @@ export default function TendersView() {
   const [page, setPage] = useState(0);
   const [selectedTender, setSelectedTender] = useState(null);
 
-  const fetchTendersAndCategories = async () => {
+  const fetchTendersAndMeta = async () => {
     try {
-      const [tendersRes, kwRes] = await Promise.all([
+      const [tendersRes, kwRes, epRes] = await Promise.all([
         api.get('/tenders', { params: { page: 0, size: 1000 } }),
         api.get('/keywords').catch(() => ({ data: [] })),
+        api.get('/search/sources').catch(() => ({ data: [] })),
       ]);
-      const content = tendersRes.data?.content || [];
-      setAllTenders(content);
+      setAllTenders(tendersRes.data?.content || []);
       setCategories(kwRes.data || []);
+      setEndpoints(epRes.data || []);
     } catch (err) {
       console.error('Błąd pobierania przetargów:', err);
     }
   };
 
   useEffect(() => {
-    fetchTendersAndCategories();
-    const interval = setInterval(fetchTendersAndCategories, 12000);
+    fetchTendersAndMeta();
+    const interval = setInterval(fetchTendersAndMeta, 12000);
     return () => clearInterval(interval);
   }, []);
+
+  const availableSources = useMemo(() => {
+    const set = new Set();
+    endpoints.forEach((ep) => {
+      if (ep.name) set.add(ep.name);
+    });
+    allTenders.forEach((t) => {
+      const s = getTenderSource(t);
+      if (s && s !== 'Nieznane') set.add(s);
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'pl'));
+  }, [endpoints, allTenders]);
 
   const toggleSort = (key) => {
     setSortConfig((prev) => ({
@@ -86,6 +150,7 @@ export default function TendersView() {
 
   const handleResetFilters = () => {
     setSearch('');
+    setSourceFilter('');
     setStatusFilter('');
     setCategoryFilter('');
     setMinCategoryScore('');
@@ -103,7 +168,7 @@ export default function TendersView() {
       if (selectedTender && selectedTender.id === tender.id) {
         setSelectedTender({ ...selectedTender, status: nextStatus });
       }
-      fetchTendersAndCategories();
+      fetchTendersAndMeta();
     } catch (err) {
       console.error('Błąd zmiany statusu:', err);
     }
@@ -120,7 +185,7 @@ export default function TendersView() {
           if (selectedTender && selectedTender.id === tender.id) {
             setSelectedTender(null);
           }
-          fetchTendersAndCategories();
+          fetchTendersAndMeta();
         } finally {
           setConfirmDialog(null);
         }
@@ -134,6 +199,11 @@ export default function TendersView() {
         const q = search.trim().toLowerCase();
         const combined = `${t.externalId || ''} ${t.title || ''} ${t.description || ''}`.toLowerCase();
         if (!combined.includes(q)) return false;
+      }
+
+      if (sourceFilter) {
+        const src = getTenderSource(t).toLowerCase();
+        if (src !== sourceFilter.toLowerCase()) return false;
       }
 
       if (statusFilter && t.status !== statusFilter) return false;
@@ -177,8 +247,8 @@ export default function TendersView() {
     filtered.sort((a, b) => {
       const { key, dir } = sortConfig;
       const mult = dir === 'asc' ? 1 : -1;
-      const valA = a[key] ?? '';
-      const valB = b[key] ?? '';
+      const valA = key === 'source' ? getTenderSource(a) : a[key] ?? '';
+      const valB = key === 'source' ? getTenderSource(b) : b[key] ?? '';
       if (typeof valA === 'number' && typeof valB === 'number') {
         return (valA - valB) * mult;
       }
@@ -189,6 +259,7 @@ export default function TendersView() {
   }, [
     allTenders,
     search,
+    sourceFilter,
     statusFilter,
     categoryFilter,
     minCategoryScore,
@@ -205,6 +276,8 @@ export default function TendersView() {
     currentPage * PAGE_SIZE + PAGE_SIZE
   );
 
+  const selectedTenderLink = selectedTender ? getTenderLink(selectedTender) : null;
+
   return (
     <div className="space-y-6 text-black">
       {confirmDialog && (
@@ -220,15 +293,14 @@ export default function TendersView() {
         />
       )}
 
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-bold text-black">Lista Przetargów</h2>
-          <p className="text-xs font-semibold text-black mt-0.5">
-            Kliknij w nagłówek kolumny, aby posortować wyniki, lub w wybrany przetarg, aby zobaczyć szczegóły.
-          </p>
-        </div>
+      <div>
+        <h2 className="text-2xl font-bold text-black">Lista Przetargów</h2>
+        <p className="text-xs font-semibold text-black mt-0.5">
+          Kliknij w dowolny nagłówek kolumny, aby posortować wyniki, lub w wybrany wiersz, aby otworzyć szczegóły i link do przetargu.
+        </p>
       </div>
 
+      {/* Pasek filtrów (z filtrem Źródło) */}
       <div className="bg-white p-4 rounded-xl border border-blue-200 shadow-xs space-y-3">
         <div className="grid grid-cols-1 md:grid-cols-6 gap-3 items-end">
           <div className="md:col-span-2">
@@ -248,6 +320,27 @@ export default function TendersView() {
                 className="w-full pl-9 pr-3 py-2 border border-blue-300 rounded-lg text-black focus:outline-none focus:border-blue-600"
               />
             </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold uppercase mb-1 text-black">
+              Źródło
+            </label>
+            <select
+              value={sourceFilter}
+              onChange={(e) => {
+                setSourceFilter(e.target.value);
+                setPage(0);
+              }}
+              className="w-full px-3 py-2 border border-blue-300 rounded-lg text-black bg-white font-semibold"
+            >
+              <option value="">Wszystkie źródła</option>
+              {availableSources.map((src) => (
+                <option key={src} value={src}>
+                  {src}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div>
@@ -302,7 +395,9 @@ export default function TendersView() {
               className="w-full px-3 py-2 border border-blue-300 rounded-lg text-black"
             />
           </div>
+        </div>
 
+        <div className="grid grid-cols-1 md:grid-cols-6 gap-3 items-end pt-2 border-t border-blue-100">
           <div>
             <label className="block text-xs font-bold uppercase mb-1 text-black">Status</label>
             <select
@@ -311,7 +406,7 @@ export default function TendersView() {
                 setStatusFilter(e.target.value);
                 setPage(0);
               }}
-              className="w-full px-3 py-2 border border-blue-300 rounded-lg text-black bg-white"
+              className="w-full px-3 py-1.5 border border-blue-300 rounded-lg text-black bg-white text-xs font-semibold"
             >
               <option value="">Wszystkie</option>
               {STATUSES.map((s) => (
@@ -321,9 +416,7 @@ export default function TendersView() {
               ))}
             </select>
           </div>
-        </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-6 gap-3 items-end pt-2 border-t border-blue-100">
           <div>
             <label className="block text-xs font-bold uppercase mb-1 text-black">Data od</label>
             <input
@@ -350,7 +443,7 @@ export default function TendersView() {
             />
           </div>
 
-          <div className="md:col-span-4 flex items-center justify-between md:justify-end gap-3">
+          <div className="md:col-span-3 flex items-center justify-between md:justify-end gap-3">
             <span className="text-xs font-extrabold text-black">
               Znaleziono przetargów: {filteredAndSortedTenders.length}
             </span>
@@ -366,98 +459,147 @@ export default function TendersView() {
         </div>
       </div>
 
-      <div className="bg-white rounded-xl border border-blue-200 overflow-hidden shadow-xs">
-        <table className="w-full text-left border-collapse">
+      {/* Tabela przetargów o stałych szerokościach kolumn i przestronnych nagłówkach */}
+      <div className="bg-white rounded-xl border border-blue-200 overflow-x-auto shadow-xs">
+        <table className="w-full text-left border-collapse table-fixed min-w-[1080px]">
           <thead>
-            <tr className="bg-blue-600 text-white text-sm select-none">
+            <tr className="bg-blue-600 text-white text-xs uppercase tracking-wide select-none">
               <th
                 onClick={() => toggleSort('externalId')}
-                className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
+                className="px-3.5 py-4 font-bold w-24 cursor-pointer hover:bg-blue-700 whitespace-nowrap"
               >
                 <div className="inline-flex items-center gap-1">
-                  ID Zewn. <ArrowUpDown size={14} />
+                  ID Zewn. <ArrowUpDown size={13} />
+                </div>
+              </th>
+              <th
+                onClick={() => toggleSort('source')}
+                className="px-3.5 py-4 font-bold w-40 cursor-pointer hover:bg-blue-700 whitespace-nowrap"
+              >
+                <div className="inline-flex items-center gap-1">
+                  Źródło <ArrowUpDown size={13} />
                 </div>
               </th>
               <th
                 onClick={() => toggleSort('title')}
-                className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
+                className="px-3.5 py-4 font-bold cursor-pointer hover:bg-blue-700 whitespace-nowrap"
               >
                 <div className="inline-flex items-center gap-1">
-                  Tytuł i skrót informacji <ArrowUpDown size={14} />
+                  Tytuł i skrót informacji <ArrowUpDown size={13} />
                 </div>
               </th>
               <th
                 onClick={() => toggleSort('score')}
-                className="p-3.5 font-bold text-center cursor-pointer hover:bg-blue-700"
+                className="px-3.5 py-4 font-bold w-56 text-center cursor-pointer hover:bg-blue-700 whitespace-nowrap"
               >
                 <div className="inline-flex items-center gap-1">
-                  Score (Kategorie i Suma) <ArrowUpDown size={14} />
+                  Score (Kategorie / Suma) <ArrowUpDown size={13} />
                 </div>
               </th>
               <th
                 onClick={() => toggleSort('publicationDate')}
-                className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
+                className="px-3.5 py-4 font-bold w-32 cursor-pointer hover:bg-blue-700 whitespace-nowrap"
               >
                 <div className="inline-flex items-center gap-1">
-                  Data publikacji <ArrowUpDown size={14} />
+                  Data publ. <ArrowUpDown size={13} />
                 </div>
               </th>
               <th
                 onClick={() => toggleSort('status')}
-                className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
+                className="px-3.5 py-4 font-bold w-36 text-center cursor-pointer hover:bg-blue-700 whitespace-nowrap"
               >
                 <div className="inline-flex items-center gap-1">
-                  Status <ArrowUpDown size={14} />
+                  Status <ArrowUpDown size={13} />
                 </div>
               </th>
-              <th className="p-3.5 font-bold text-right">Akcje</th>
+              <th className="px-3.5 py-4 font-bold w-28 text-center whitespace-nowrap">
+                Akcje
+              </th>
             </tr>
           </thead>
+
           <tbody className="divide-y divide-blue-100 text-sm text-black">
             {paginatedTenders.length === 0 ? (
               <tr>
-                <td colSpan="6" className="p-6 text-center font-medium text-black">
+                <td colSpan="7" className="p-6 text-center font-medium text-black">
                   Brak przetargów spełniających wybrane kryteria.
                 </td>
               </tr>
             ) : (
               paginatedTenders.map((t) => {
-                const scoreLabel = getTenderScoreDisplay(t);
+                const scoreEntries = getTenderScoreEntries(t);
+                const sourceName = getTenderSource(t);
+
                 return (
                   <tr
                     key={t.id}
                     onClick={() => setSelectedTender(t)}
                     className="hover:bg-blue-50/80 transition cursor-pointer"
                   >
-                    <td className="p-3.5 font-mono font-semibold whitespace-nowrap">
-                      {t.externalId}
+                    {/* Ściśnięte ID Zewn. z natywnym tooltipem przeglądarki */}
+                    <td className="px-3.5 py-3 align-middle">
+                      <div
+                        title={t.externalId}
+                        className="truncate font-mono text-xs font-semibold text-black"
+                      >
+                        {t.externalId}
+                      </div>
                     </td>
-                    <td className="p-3.5">
-                      <div className="font-bold text-black">{t.title}</div>
+
+                    {/* Kolumna Źródło */}
+                    <td className="px-3.5 py-3 align-middle">
+                      <div
+                        title={sourceName}
+                        className="truncate px-2.5 py-1 bg-slate-100 border border-blue-200 rounded-md text-xs font-bold text-black"
+                      >
+                        {sourceName}
+                      </div>
+                    </td>
+
+                    {/* Tytuł i skrót informacji */}
+                    <td className="px-3.5 py-3 align-middle">
+                      <div className="font-bold text-black line-clamp-2">{t.title}</div>
                       {t.description && (
-                        <div className="text-xs text-black mt-1 line-clamp-2 whitespace-pre-line">
+                        <div className="text-xs text-black/80 mt-1 line-clamp-2 whitespace-pre-line">
                           {t.description}
                         </div>
                       )}
                     </td>
-                    <td className="p-3.5 text-center">
-                      <div className="inline-flex flex-col items-center gap-1 px-3 py-1.5 rounded-lg bg-blue-100 border-2 border-blue-600 text-black">
-                        <span className="font-extrabold text-xs">{scoreLabel}</span>
-                        <span className="text-[11px] font-bold bg-white px-2 py-0.5 rounded border border-blue-300">
+
+                    {/* Stały rozmiar Score z małym suwakiem kategorii i zawsze widoczną sumą */}
+                    <td
+                      className="px-3.5 py-3 align-middle"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <div className="w-48 mx-auto rounded-lg bg-blue-100 border-2 border-blue-600 overflow-hidden flex flex-col">
+                        {scoreEntries.length > 0 && (
+                          <div className="max-h-14 overflow-y-auto px-2 py-1 space-y-0.5 text-left text-[11px] font-extrabold text-black [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-blue-50 [&::-webkit-scrollbar-thumb]:bg-blue-500 [&::-webkit-scrollbar-thumb]:rounded-full">
+                            {scoreEntries.map((entry, idx) => (
+                              <div key={idx} className="truncate" title={entry}>
+                                {entry}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        <div className="bg-white border-t border-blue-300 px-2 py-1 text-[11px] font-extrabold text-center text-black shrink-0">
                           Suma: {t.score} pkt
-                        </span>
+                        </div>
                       </div>
                     </td>
-                    <td className="p-3.5 whitespace-nowrap">
+
+                    {/* Data publikacji */}
+                    <td className="px-3.5 py-3 align-middle whitespace-nowrap text-xs font-semibold">
                       {t.publicationDate
                         ? new Date(t.publicationDate).toLocaleDateString('pl-PL')
                         : '—'}
                     </td>
-                    <td className="p-3.5 whitespace-nowrap">
+
+                    {/* Stała szerokość przycisku Status — brak rozszerzania kolumny */}
+                    <td className="px-3.5 py-3 align-middle text-center">
                       <button
                         type="button"
                         onClick={(e) => handleToggleStatus(e, t)}
-                        className={`px-3.5 py-1.5 rounded-lg text-xs font-extrabold border-2 shadow-xs transition transform active:scale-95 cursor-pointer ${
+                        className={`w-28 py-1.5 rounded-lg text-xs font-extrabold border-2 shadow-xs transition cursor-pointer text-center ${
                           t.status === 'INTERESTED'
                             ? 'bg-green-400 hover:bg-green-500 border-green-800 text-black'
                             : 'bg-blue-100 hover:bg-blue-200 border-blue-600 text-black'
@@ -466,24 +608,26 @@ export default function TendersView() {
                         {t.status}
                       </button>
                     </td>
-                    <td className="p-3.5 text-right whitespace-nowrap">
-                      <div className="flex items-center justify-end gap-2">
+
+                    {/* Akcje ułożone pionowo: Szczegóły nad Usuń */}
+                    <td className="px-3.5 py-3 align-middle">
+                      <div className="flex flex-col gap-1.5 items-stretch">
                         <button
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
                             setSelectedTender(t);
                           }}
-                          className="inline-flex items-center gap-1 px-3 py-1.5 bg-white border border-blue-400 hover:bg-blue-50 text-black rounded-lg font-bold text-xs cursor-pointer"
+                          className="inline-flex items-center justify-center gap-1 px-2.5 py-1 bg-white border border-blue-400 hover:bg-blue-50 text-black rounded-lg font-bold text-xs cursor-pointer"
                         >
-                          <Eye size={14} /> Szczegóły
+                          <Eye size={13} /> Szczegóły
                         </button>
                         <button
                           type="button"
                           onClick={(e) => confirmDeleteTender(e, t)}
-                          className="inline-flex items-center gap-1 px-3 py-1.5 bg-white border border-red-400 hover:bg-red-100 text-black rounded-lg font-bold text-xs cursor-pointer"
+                          className="inline-flex items-center justify-center gap-1 px-2.5 py-1 bg-white border border-red-400 hover:bg-red-100 text-black rounded-lg font-bold text-xs cursor-pointer"
                         >
-                          <Trash2 size={14} /> Usuń
+                          <Trash2 size={13} /> Usuń
                         </button>
                       </div>
                     </td>
@@ -495,6 +639,7 @@ export default function TendersView() {
         </table>
       </div>
 
+      {/* Paginacja */}
       <div className="flex items-center justify-between">
         <button
           disabled={currentPage === 0}
@@ -515,6 +660,7 @@ export default function TendersView() {
         </button>
       </div>
 
+      {/* Modal pełnych szczegółów przetargu z klikalnym linkiem */}
       {selectedTender && (
         <div
           onClick={() => setSelectedTender(null)}
@@ -525,10 +671,15 @@ export default function TendersView() {
             className="bg-white rounded-2xl border-2 border-blue-600 max-w-2xl w-full p-6 shadow-xl space-y-5 text-black max-h-[85vh] overflow-y-auto"
           >
             <div className="flex items-start justify-between gap-4 border-b border-blue-200 pb-4">
-              <div>
-                <span className="text-xs font-mono font-bold px-2.5 py-1 bg-blue-50 border border-blue-300 rounded">
-                  ID Zewnętrzne: {selectedTender.externalId}
-                </span>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-mono font-bold px-2.5 py-1 bg-blue-50 border border-blue-300 rounded">
+                    ID: {selectedTender.externalId}
+                  </span>
+                  <span className="text-xs font-bold px-2.5 py-1 bg-slate-100 border border-slate-300 rounded">
+                    Źródło: {getTenderSource(selectedTender)}
+                  </span>
+                </div>
                 <h3 className="text-xl font-extrabold text-black mt-2">
                   {selectedTender.title}
                 </h3>
@@ -536,11 +687,40 @@ export default function TendersView() {
               <button
                 type="button"
                 onClick={() => setSelectedTender(null)}
-                className="p-1.5 rounded-lg border border-blue-300 hover:bg-blue-50 cursor-pointer"
+                className="p-1.5 rounded-lg border border-blue-300 hover:bg-blue-50 cursor-pointer shrink-0"
               >
                 <X size={20} />
               </button>
             </div>
+
+            {/* Klikalny link do przetargu */}
+            {selectedTenderLink ? (
+              <div className="p-3.5 bg-blue-50 border-2 border-blue-500 rounded-xl flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="text-[11px] font-extrabold uppercase text-blue-800">
+                    Link do ogłoszenia przetargowego
+                  </div>
+                  <div
+                    title={selectedTenderLink}
+                    className="text-xs font-mono text-black truncate mt-0.5"
+                  >
+                    {selectedTenderLink}
+                  </div>
+                </div>
+                <a
+                  href={selectedTenderLink}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-extrabold rounded-lg text-xs shrink-0"
+                >
+                  <ExternalLink size={14} /> Otwórz przetarg
+                </a>
+              </div>
+            ) : (
+              <div className="p-3 bg-slate-100 border border-slate-300 rounded-xl text-xs font-semibold text-slate-700">
+                Brak bezpośredniego linku URL dla tego ogłoszenia.
+              </div>
+            )}
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div className="p-3 bg-blue-50/70 border border-blue-200 rounded-xl">
@@ -565,13 +745,13 @@ export default function TendersView() {
                 <button
                   type="button"
                   onClick={(e) => handleToggleStatus(e, selectedTender)}
-                  className={`px-3 py-1 rounded-lg text-xs font-extrabold border-2 cursor-pointer ${
+                  className={`w-28 py-1 rounded-lg text-xs font-extrabold border-2 cursor-pointer text-center ${
                     selectedTender.status === 'INTERESTED'
                       ? 'bg-green-400 border-green-800 text-black'
                       : 'bg-blue-100 border-blue-600 text-black'
                   }`}
                 >
-                  {selectedTender.status} (Zmień)
+                  {selectedTender.status}
                 </button>
               </div>
             </div>
