@@ -1,7 +1,16 @@
 import { useState, useEffect, useMemo } from 'react';
 import api from '../api';
 import ConfirmModal from './ConfirmModal';
-import { Trash2, Plus, Pencil, Check, X, KeyRound, ArrowUpDown } from 'lucide-react';
+import {
+  Trash2,
+  Plus,
+  Pencil,
+  Check,
+  X,
+  KeyRound,
+  ArrowUpDown,
+  Settings,
+} from 'lucide-react';
 
 export function parseKeywordsString(raw) {
   if (!raw) return [];
@@ -62,6 +71,7 @@ export default function KeywordsView() {
   const [newWordsText, setNewWordsText] = useState('');
 
   const [selectedKeyword, setSelectedKeyword] = useState(null);
+  const [openBulkMenuCatId, setOpenBulkMenuCatId] = useState(null);
 
   const fetchCategories = async () => {
     try {
@@ -75,6 +85,16 @@ export default function KeywordsView() {
   useEffect(() => {
     fetchCategories();
   }, []);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (openBulkMenuCatId !== null && !e.target.closest('[data-bulk-menu]')) {
+        setOpenBulkMenuCatId(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [openBulkMenuCatId]);
 
   const toggleSort = (key) => {
     setSortConfig((prev) => ({
@@ -172,6 +192,57 @@ export default function KeywordsView() {
       fetchCategories();
     } catch (err) {
       console.error('Błąd zapisu słowa:', err);
+    }
+  };
+
+  // Zbiorcze ustawienie trybu dla wszystkich słów w kategorii: 'NEUTRAL' | 'EXCLUDED' | 'WILDCARD'
+  const handleBulkUpdateCategoryKeywords = async (cat, mode) => {
+    const list = parseKeywordsString(cat.keywords);
+    if (list.length === 0) {
+      setOpenBulkMenuCatId(null);
+      return;
+    }
+
+    const updatedList = list.map((kw) => {
+      const trimmedWord = kw.word.trim();
+      if (mode === 'NEUTRAL') {
+        return {
+          ...kw,
+          isExcluded: false,
+          isWildcard: false,
+        };
+      }
+      if (mode === 'EXCLUDED') {
+        return {
+          ...kw,
+          isExcluded: true,
+          isWildcard: false,
+        };
+      }
+      // mode === 'WILDCARD'
+      const wordWithStar = trimmedWord.endsWith('*') ? trimmedWord : `${trimmedWord}*`;
+      return {
+        ...kw,
+        word: wordWithStar,
+        isExcluded: false,
+        isWildcard: true,
+      };
+    });
+
+    try {
+      await api.put(`/keywords/${cat.id}`, {
+        name: cat.name,
+        keywords: serializeKeywordsList(updatedList),
+        score: 50,
+        isExcluded: false,
+      });
+      setOpenBulkMenuCatId(null);
+      if (selectedKeyword?.catId === cat.id) {
+        setSelectedKeyword(null);
+      }
+      fetchCategories();
+    } catch (err) {
+      console.error('Błąd zbiorczej aktualizacji słów kluczowych:', err);
     }
   };
 
@@ -286,7 +357,7 @@ export default function KeywordsView() {
         <div>
           <h2 className="text-2xl font-bold text-black">Kategorie i Wagi Słów Kluczowych</h2>
           <p className="text-xs font-semibold text-black">
-            Utwórz kategorię ze słowami kluczowymi (np. dostaw*), a następnie kliknij słowo na liście, aby ustawić wagę (1–100), odmianę końcówek (*) lub wykluczenie.
+            Utwórz kategorię ze słowami kluczowymi (np. dostaw*), kliknij pojedyncze słowo lub użyj zębatki, aby zbiorczo zmienić tryb wszystkich słów w kategorii.
           </p>
         </div>
       </div>
@@ -436,7 +507,6 @@ export default function KeywordsView() {
             </div>
 
             <div className="flex flex-col justify-between gap-3">
-              {/* Opcja Odmiana końcówek (Wildcard *) */}
               <label className="flex items-start gap-2.5 p-3 bg-purple-50 rounded-xl border-2 border-purple-500 cursor-pointer select-none">
                 <input
                   type="checkbox"
@@ -455,7 +525,6 @@ export default function KeywordsView() {
                 </div>
               </label>
 
-              {/* Opcja Wyklucz */}
               <label className="flex items-start gap-2.5 p-3 bg-white rounded-xl border-2 border-red-300 cursor-pointer select-none">
                 <input
                   type="checkbox"
@@ -503,13 +572,14 @@ export default function KeywordsView() {
         </div>
       )}
 
-      <div className="bg-white rounded-xl border border-blue-200 overflow-hidden shadow-xs">
+      {/* Tabela kategorii (overflow-visible, aby menu zębatki nie było ucinane) */}
+      <div className="bg-white rounded-xl border border-blue-200 overflow-visible shadow-xs">
         <table className="w-full text-left border-collapse text-sm">
           <thead>
             <tr className="bg-blue-600 text-white select-none">
               <th
                 onClick={() => toggleSort('name')}
-                className="p-3.5 font-bold w-64 cursor-pointer hover:bg-blue-700"
+                className="p-3.5 font-bold w-64 cursor-pointer hover:bg-blue-700 rounded-tl-xl"
               >
                 <div className="inline-flex items-center gap-1">
                   Nazwa kategorii <ArrowUpDown size={14} />
@@ -524,7 +594,7 @@ export default function KeywordsView() {
                   <ArrowUpDown size={14} />
                 </div>
               </th>
-              <th className="p-3.5 font-bold text-right w-44">Akcje</th>
+              <th className="p-3.5 font-bold text-right w-56 rounded-tr-xl">Akcje</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-blue-100">
@@ -539,6 +609,7 @@ export default function KeywordsView() {
                 const parsedList = parseKeywordsString(cat.keywords);
                 const isEditingName = editingCatId === cat.id;
                 const isAddingWords = addingWordCatId === cat.id;
+                const isBulkMenuOpen = openBulkMenuCatId === cat.id;
 
                 return (
                   <tr key={cat.id} className="hover:bg-blue-50/40">
@@ -655,6 +726,62 @@ export default function KeywordsView() {
 
                     <td className="p-3.5 text-right whitespace-nowrap align-top">
                       <div className="flex items-center justify-end gap-2">
+                        {/* Zębatka — zbiorcze ustawienie trybu dla wszystkich słów kategorii */}
+                        <div className="relative" data-bulk-menu>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setOpenBulkMenuCatId(isBulkMenuOpen ? null : cat.id)
+                            }
+                            title="Zbiorczo ustaw tryb dla wszystkich słów w tej kategorii"
+                            className={`p-1.5 rounded-lg border transition cursor-pointer ${
+                              isBulkMenuOpen
+                                ? 'bg-blue-600 border-blue-800 text-white'
+                                : 'bg-white border-blue-400 hover:bg-blue-50 text-black'
+                            }`}
+                          >
+                            <Settings size={15} />
+                          </button>
+
+                          {isBulkMenuOpen && (
+                            <div className="absolute right-0 top-full mt-1.5 w-52 bg-white rounded-xl border-2 border-blue-600 shadow-xl z-40 p-1.5 text-left space-y-1">
+                              <div className="px-2.5 py-1 text-[10px] font-extrabold uppercase text-blue-700 border-b border-blue-100">
+                                Ustaw wszystkie słowa jako:
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleBulkUpdateCategoryKeywords(cat, 'NEUTRAL')
+                                }
+                                className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs font-extrabold text-black hover:bg-blue-50 cursor-pointer"
+                              >
+                                <span className="w-3 h-3 rounded-full bg-blue-200 border-2 border-blue-500 shrink-0" />
+                                Neutralne
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleBulkUpdateCategoryKeywords(cat, 'WILDCARD')
+                                }
+                                className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs font-extrabold text-black hover:bg-purple-50 cursor-pointer"
+                              >
+                                <span className="w-3 h-3 rounded-full bg-purple-300 border-2 border-purple-800 shrink-0" />
+                                Wildcards (*)
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleBulkUpdateCategoryKeywords(cat, 'EXCLUDED')
+                                }
+                                className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs font-extrabold text-black hover:bg-red-50 cursor-pointer"
+                              >
+                                <span className="w-3 h-3 rounded-full bg-red-400 border-2 border-red-800 shrink-0" />
+                                Wykluczone
+                              </button>
+                            </div>
+                          )}
+                        </div>
+
                         <button
                           type="button"
                           onClick={() => {
