@@ -13,7 +13,9 @@ import jakarta.persistence.Table;
 
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 @Entity
 @Table(name = "fetch_runs")
@@ -52,6 +54,14 @@ public class FetchRun {
     )
     private List<Tender> tenders = new ArrayList<>();
 
+    @ManyToMany(fetch = FetchType.EAGER)
+    @JoinTable(
+            name = "fetch_run_tender_updates",
+            joinColumns = @JoinColumn(name = "fetch_run_id"),
+            inverseJoinColumns = @JoinColumn(name = "tender_update_id")
+    )
+    private Set<TenderUpdate> tenderUpdates = new LinkedHashSet<>();
+
     public FetchRun() {
     }
 
@@ -81,4 +91,7 @@ public class FetchRun {
 
     public List<Tender> getTenders() { return tenders; }
     public void setTenders(List<Tender> tenders) { this.tenders = tenders; }
+
+    public Set<TenderUpdate> getTenderUpdates() { return tenderUpdates; }
+    public void setTenderUpdates(Set<TenderUpdate> tenderUpdates) { this.tenderUpdates = tenderUpdates; }
 }

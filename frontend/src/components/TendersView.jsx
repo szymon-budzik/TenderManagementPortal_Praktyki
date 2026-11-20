@@ -9,6 +9,7 @@ import {
   X,
   ArrowUpDown,
   ExternalLink,
+  Clock,
 } from 'lucide-react';
 
 const STATUSES = ['NEW', 'INTERESTED'];
@@ -64,6 +65,85 @@ function getTenderLink(tender) {
   return null;
 }
 
+function getTenderDeadlineIso(tender) {
+  if (tender?.submissionDeadline) return tender.submissionDeadline;
+  if (!tender?.description) return null;
+
+  const lines = tender.description.split('\n');
+  for (const line of lines) {
+    const idx = line.indexOf(':');
+    if (idx <= 0) continue;
+    const keyNorm = line.substring(0, idx).toLowerCase().replace(/[_\-\s]/g, '');
+    if (
+      keyNorm.includes('publication') ||
+      keyNorm.includes('publish') ||
+      keyNorm.includes('created') ||
+      keyNorm.includes('updated')
+    ) {
+      continue;
+    }
+    if (
+      keyNorm.includes('deadline') ||
+      keyNorm.includes('submitting') ||
+      keyNorm.includes('submission') ||
+      keyNorm.includes('closing') ||
+      keyNorm.includes('termin')
+    ) {
+      const val = line.substring(idx + 1).trim();
+      const dt = new Date(val.replace(' ', 'T'));
+      if (!Number.isNaN(dt.getTime())) {
+        return dt.toISOString();
+      }
+    }
+  }
+  return null;
+}
+
+function getShortHoursBadge(deadlineIso, nowMs) {
+  if (!deadlineIso) return null;
+  const targetMs = new Date(deadlineIso).getTime();
+  if (Number.isNaN(targetMs)) return null;
+  const diffMs = targetMs - nowMs;
+
+  if (diffMs <= 0) {
+    return {
+      text: 'Po terminie',
+      cls: 'bg-red-100 border-red-400 text-red-900',
+    };
+  }
+  const hours = Math.floor(diffMs / 3600000);
+  const mins = Math.floor((diffMs % 3600000) / 60000);
+  if (hours < 24) {
+    return {
+      text: `${hours}g ${mins}m`,
+      cls: 'bg-red-200 border-red-600 text-black',
+    };
+  }
+  if (hours <= 72) {
+    return {
+      text: `${hours} godz.`,
+      cls: 'bg-amber-100 border-amber-600 text-black',
+    };
+  }
+  return {
+    text: `${hours} godz.`,
+    cls: 'bg-green-100 border-green-600 text-black',
+  };
+}
+
+function formatDateTimePl(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleString('pl-PL', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
 function parseCategoryScoreMap(tender) {
   const map = {};
   if (!tender?.description) return map;
@@ -90,6 +170,7 @@ export default function TendersView() {
   const [allTenders, setAllTenders] = useState([]);
   const [categories, setCategories] = useState([]);
   const [endpoints, setEndpoints] = useState([]);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const [sortConfig, setSortConfig] = useState({ key: 'publicationDate', dir: 'desc' });
   const [confirmDialog, setConfirmDialog] = useState(null);
 
@@ -123,7 +204,11 @@ export default function TendersView() {
   useEffect(() => {
     fetchTendersAndMeta();
     const interval = setInterval(fetchTendersAndMeta, 12000);
-    return () => clearInterval(interval);
+    const clock = setInterval(() => setNowMs(Date.now()), 60000);
+    return () => {
+      clearInterval(interval);
+      clearInterval(clock);
+    };
   }, []);
 
   const availableSources = useMemo(() => {
@@ -161,10 +246,11 @@ export default function TendersView() {
     e.stopPropagation();
     const nextStatus = tender.status === 'INTERESTED' ? 'NEW' : 'INTERESTED';
     try {
-      await api.patch(`/tenders/${tender.id}/status`, { status: nextStatus });
+      const res = await api.patch(`/tenders/${tender.id}/status`, { status: nextStatus });
       if (selectedTender && selectedTender.id === tender.id) {
-        setSelectedTender({ ...selectedTender, status: nextStatus });
+        setSelectedTender(res.data || { ...selectedTender, status: nextStatus });
       }
+      window.dispatchEvent(new Event('observedUpdated'));
       fetchTendersAndMeta();
     } catch (err) {
       console.error('Błąd zmiany statusu:', err);
@@ -182,6 +268,7 @@ export default function TendersView() {
           if (selectedTender && selectedTender.id === tender.id) {
             setSelectedTender(null);
           }
+          window.dispatchEvent(new Event('observedUpdated'));
           fetchTendersAndMeta();
         } finally {
           setConfirmDialog(null);
@@ -274,6 +361,10 @@ export default function TendersView() {
   );
 
   const selectedTenderLink = selectedTender ? getTenderLink(selectedTender) : null;
+  const selectedTenderDeadline = selectedTender ? getTenderDeadlineIso(selectedTender) : null;
+  const selectedTenderHoursBadge = selectedTender
+    ? getShortHoursBadge(selectedTenderDeadline, nowMs)
+    : null;
 
   return (
     <div className="space-y-6 text-black">
@@ -297,7 +388,7 @@ export default function TendersView() {
         </p>
       </div>
 
-      {/* Pasek filtrów (z filtrem Źródło) */}
+      {/* Pasek filtrów */}
       <div className="bg-white p-4 rounded-xl border border-blue-200 shadow-xs space-y-3">
         <div className="grid grid-cols-1 md:grid-cols-6 gap-3 items-end">
           <div className="md:col-span-2">
@@ -456,9 +547,9 @@ export default function TendersView() {
         </div>
       </div>
 
-      {/* Tabela przetargów o stałych szerokościach kolumn i przestronnych nagłówkach */}
+      {/* Tabela przetargów */}
       <div className="bg-white rounded-xl border border-blue-200 overflow-x-auto shadow-xs">
-        <table className="w-full text-left border-collapse table-fixed min-w-[1080px]">
+        <table className="w-full text-left border-collapse table-fixed min-w-[1120px]">
           <thead>
             <tr className="bg-blue-600 text-white text-xs uppercase tracking-wide select-none">
               <th
@@ -495,10 +586,10 @@ export default function TendersView() {
               </th>
               <th
                 onClick={() => toggleSort('publicationDate')}
-                className="px-3.5 py-4 font-bold w-32 cursor-pointer hover:bg-blue-700 whitespace-nowrap"
+                className="px-3.5 py-4 font-bold w-44 cursor-pointer hover:bg-blue-700 whitespace-nowrap"
               >
                 <div className="inline-flex items-center gap-1">
-                  Data publ. <ArrowUpDown size={13} />
+                  Data / Termin <ArrowUpDown size={13} />
                 </div>
               </th>
               <th
@@ -526,6 +617,8 @@ export default function TendersView() {
               paginatedTenders.map((t) => {
                 const scoreEntries = getTenderScoreEntries(t);
                 const sourceName = getTenderSource(t);
+                const deadlineIso = getTenderDeadlineIso(t);
+                const hoursBadge = getShortHoursBadge(deadlineIso, nowMs);
 
                 return (
                   <tr
@@ -533,7 +626,6 @@ export default function TendersView() {
                     onClick={() => setSelectedTender(t)}
                     className="hover:bg-blue-50/80 transition cursor-pointer"
                   >
-                    {/* Ściśnięte ID Zewn. z natywnym tooltipem przeglądarki */}
                     <td className="px-3.5 py-3 align-middle">
                       <div
                         title={t.externalId}
@@ -543,7 +635,6 @@ export default function TendersView() {
                       </div>
                     </td>
 
-                    {/* Kolumna Źródło */}
                     <td className="px-3.5 py-3 align-middle">
                       <div
                         title={sourceName}
@@ -553,7 +644,6 @@ export default function TendersView() {
                       </div>
                     </td>
 
-                    {/* Tytuł i skrót informacji */}
                     <td className="px-3.5 py-3 align-middle">
                       <div className="font-bold text-black line-clamp-2">{t.title}</div>
                       {t.description && (
@@ -563,7 +653,6 @@ export default function TendersView() {
                       )}
                     </td>
 
-                    {/* Stały rozmiar Score z małym suwakiem kategorii i zawsze widoczną sumą */}
                     <td
                       className="px-3.5 py-3 align-middle"
                       onClick={(e) => e.stopPropagation()}
@@ -584,14 +673,27 @@ export default function TendersView() {
                       </div>
                     </td>
 
-                    {/* Data publikacji */}
-                    <td className="px-3.5 py-3 align-middle whitespace-nowrap text-xs font-semibold">
-                      {t.publicationDate
-                        ? new Date(t.publicationDate).toLocaleDateString('pl-PL')
-                        : '—'}
+                    {/* Data publikacji z godziną + Termin składania ofert z godziną i licznikiem godzin */}
+                    <td className="px-3.5 py-3 align-middle whitespace-nowrap text-xs">
+                      <div className="font-semibold text-black">
+                        {formatDateTimePl(t.publicationDate)}
+                      </div>
+                      {deadlineIso && (
+                        <div className="mt-1 space-y-0.5">
+                          <div className="text-[11px] font-bold text-amber-900">
+                            Do: {formatDateTimePl(deadlineIso)}
+                          </div>
+                          {hoursBadge && (
+                            <span
+                              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-extrabold ${hoursBadge.cls}`}
+                            >
+                              <Clock size={10} /> {hoursBadge.text}
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </td>
 
-                    {/* Stała szerokość przycisku Status — brak rozszerzania kolumny */}
                     <td className="px-3.5 py-3 align-middle text-center">
                       <button
                         type="button"
@@ -606,7 +708,6 @@ export default function TendersView() {
                       </button>
                     </td>
 
-                    {/* Akcje ułożone pionowo: Szczegóły nad Usuń */}
                     <td className="px-3.5 py-3 align-middle">
                       <div className="flex flex-col gap-1.5 items-stretch">
                         <button
@@ -657,7 +758,7 @@ export default function TendersView() {
         </button>
       </div>
 
-      {/* Modal pełnych szczegółów przetargu z klikalnym linkiem */}
+      {/* Modal pełnych szczegółów przetargu */}
       {selectedTender && (
         <div
           onClick={() => setSelectedTender(null)}
@@ -690,7 +791,6 @@ export default function TendersView() {
               </button>
             </div>
 
-            {/* Klikalny link do przetargu */}
             {selectedTenderLink ? (
               <div className="p-3.5 bg-blue-50 border-2 border-blue-500 rounded-xl flex flex-wrap items-center justify-between gap-3">
                 <div className="min-w-0 flex-1">
@@ -719,23 +819,34 @@ export default function TendersView() {
               </div>
             )}
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <div className="p-3 bg-blue-50/70 border border-blue-200 rounded-xl">
-                <div className="text-xs font-bold uppercase">Punktacja kategorii</div>
-                <div className="text-sm font-extrabold mt-1">
+                <div className="text-xs font-bold uppercase">Punktacja</div>
+                <div className="text-xs font-extrabold mt-1">
                   {getTenderScoreDisplay(selectedTender)}
                 </div>
                 <div className="text-[11px] font-semibold mt-0.5">
-                  Suma całkowita: {selectedTender.score} pkt
+                  Suma: {selectedTender.score} pkt
                 </div>
               </div>
               <div className="p-3 bg-blue-50/70 border border-blue-200 rounded-xl">
                 <div className="text-xs font-bold uppercase">Data publikacji</div>
-                <div className="text-sm font-extrabold mt-1">
-                  {selectedTender.publicationDate
-                    ? new Date(selectedTender.publicationDate).toLocaleString('pl-PL')
-                    : '—'}
+                <div className="text-xs font-extrabold mt-1">
+                  {formatDateTimePl(selectedTender.publicationDate)}
                 </div>
+              </div>
+              <div className="p-3 bg-amber-50/80 border border-amber-300 rounded-xl">
+                <div className="text-xs font-bold uppercase">Termin składania</div>
+                <div className="text-xs font-extrabold mt-1">
+                  {selectedTenderDeadline ? formatDateTimePl(selectedTenderDeadline) : 'Brak'}
+                </div>
+                {selectedTenderHoursBadge && (
+                  <span
+                    className={`mt-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-extrabold ${selectedTenderHoursBadge.cls}`}
+                  >
+                    <Clock size={10} /> {selectedTenderHoursBadge.text}
+                  </span>
+                )}
               </div>
               <div className="p-3 bg-blue-50/70 border border-blue-200 rounded-xl">
                 <div className="text-xs font-bold uppercase mb-1">Status</div>

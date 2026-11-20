@@ -180,9 +180,9 @@ public class AutomationController {
 
     @PostMapping("/profiles/{id}/trigger")
     public ResponseEntity<TenderExecutionService.ExecutionSummary> triggerProfileNow(@PathVariable Long id) {
-        return ResponseEntity.ok(executionService.executeProfileNow(id));
+        return ResponseEntity.ok(executionService.executeProfileNow(id, false));
     }
-
+    
     // --- HISTORIA POBRAŃ ---
 
     @GetMapping("/runs")

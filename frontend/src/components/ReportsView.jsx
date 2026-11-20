@@ -329,7 +329,7 @@ export default function ReportsView() {
                 </th>
                 <th
                   onClick={() => toggleSort('sourceType')}
-                  className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
+                  className="p-3.5 font-bold cursor-pointer hover:bg-blue-700 whitespace-nowrap"
                 >
                   <div className="inline-flex items-center gap-1">
                     Tryb <ArrowUpDown size={14} />
@@ -380,9 +380,11 @@ export default function ReportsView() {
               ) : (
                 sortedRuns.map((r) => {
                   const checked = selectedRunIds.includes(r.id);
-                  const isCron = r.sourceType && r.sourceType.toUpperCase().startsWith('CRON');
-                  const modeLabel =
-                    r.sourceType === 'MANUAL' ? 'RĘCZNE' : r.sourceType || 'RĘCZNE';
+                  const upperType = (r.sourceType || '').toUpperCase();
+                  const isCron = upperType.startsWith('CRON');
+                  const isObserved = upperType.startsWith('OBSERWOWANE');
+                  const bracketMatch = r.sourceType?.match(/\[(.+)\]$/);
+                  const subLabel = bracketMatch ? bracketMatch[1].trim() : null;
 
                   return (
                     <tr
@@ -404,16 +406,40 @@ export default function ReportsView() {
                       <td className="p-3.5 whitespace-nowrap">
                         {r.createdAt ? new Date(r.createdAt).toLocaleString('pl-PL') : '—'}
                       </td>
-                      <td className="p-3.5">
-                        <span
-                          className={`px-2.5 py-1 rounded text-xs font-extrabold border ${
-                            isCron
-                              ? 'bg-amber-200 border-amber-700 text-black'
-                              : 'bg-blue-100 border-blue-600 text-black'
-                          }`}
-                        >
-                          {modeLabel}
-                        </span>
+                      <td className="p-3.5 align-middle">
+                        {isCron ? (
+                          <div className="inline-flex flex-col items-start gap-1">
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-[11px] font-extrabold border-2 bg-amber-200 border-amber-700 text-black whitespace-nowrap">
+                              CRON
+                            </span>
+                            {subLabel && (
+                              <span
+                                title={subLabel}
+                                className="text-xs font-bold text-slate-700 leading-tight max-w-[160px] truncate"
+                              >
+                                {subLabel}
+                              </span>
+                            )}
+                          </div>
+                        ) : isObserved ? (
+                          <div className="inline-flex flex-col items-start gap-1">
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-[11px] font-extrabold border-2 bg-green-200 border-green-800 text-black whitespace-nowrap">
+                              OBSERWOWANE
+                            </span>
+                            {subLabel && (
+                              <span
+                                title={subLabel}
+                                className="text-xs font-bold text-slate-700 leading-tight max-w-[160px] truncate"
+                              >
+                                {subLabel}
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-[11px] font-extrabold border-2 bg-blue-100 border-blue-600 text-black whitespace-nowrap">
+                            RĘCZNE
+                          </span>
+                        )}
                       </td>
                       <td className="p-3.5 text-xs">{r.sourcesSummary || '—'}</td>
                       <td className="p-3.5 text-center font-bold">{r.totalFetched}</td>

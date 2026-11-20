@@ -298,6 +298,7 @@ export default function AutomationView() {
     } catch (err) {
       console.error('Błąd uruchamiania profilu:', err);
     } finally {
+      window.dispatchEvent(new Event('notificationsUpdated'));
       setLoadingAction(false);
     }
   };

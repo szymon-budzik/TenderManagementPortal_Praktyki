@@ -5,6 +5,7 @@ import SearchView from './components/SearchView';
 import AutomationView from './components/AutomationView';
 import ReportsView from './components/ReportsView';
 import TendersView from './components/TendersView';
+import ObservedView from './components/ObservedView';
 import AnalyticsView from './components/AnalyticsView';
 import EndpointsView from './components/EndpointsView';
 import KeywordsView from './components/KeywordsView';
@@ -16,6 +17,7 @@ import {
   Clock,
   FileSpreadsheet,
   FileText,
+  BookmarkCheck,
   BarChart3,
   Users,
   Globe,
@@ -41,6 +43,7 @@ export default function App() {
     return localStorage.getItem('activeTab') || 'search';
   });
 
+  const [observedBadge, setObservedBadge] = useState({ observedCount: 0, unreadCount: 0 });
   const [, setTick] = useState(0);
 
   const handleSelectTab = (tabId) => {
@@ -55,14 +58,31 @@ export default function App() {
     setAuth(null);
   };
 
+  const fetchObservedBadge = async () => {
+    if (!localStorage.getItem('token')) return;
+    try {
+      const res = await api.get('/tenders/observed/badge');
+      setObservedBadge({
+        observedCount: res.data?.observedCount || 0,
+        unreadCount: res.data?.unreadCount || 0,
+      });
+    } catch {
+      // Ciche pominięcie
+    }
+  };
+
   useEffect(() => {
     const handleUpdate = () => setTick((t) => t + 1);
     const handleForceLogout = () => setAuth(null);
+    const handleObservedUpdated = () => fetchObservedBadge();
+
     window.addEventListener('rolesUpdated', handleUpdate);
     window.addEventListener('authForceLogout', handleForceLogout);
+    window.addEventListener('observedUpdated', handleObservedUpdated);
     return () => {
       window.removeEventListener('rolesUpdated', handleUpdate);
       window.removeEventListener('authForceLogout', handleForceLogout);
+      window.removeEventListener('observedUpdated', handleObservedUpdated);
     };
   }, []);
 
@@ -74,12 +94,22 @@ export default function App() {
     }
     api
       .get('/search/sources')
-      .then(() => setCheckingSession(false))
+      .then(() => {
+        setCheckingSession(false);
+        fetchObservedBadge();
+      })
       .catch(() => {
         handleLogout();
         setCheckingSession(false);
       });
   }, []);
+
+  useEffect(() => {
+    if (!auth) return;
+    fetchObservedBadge();
+    const interval = setInterval(fetchObservedBadge, 10000);
+    return () => clearInterval(interval);
+  }, [auth]);
 
   if (checkingSession) {
     return null;
@@ -92,16 +122,16 @@ export default function App() {
   const effectiveRole = getEffectiveUserRole(auth.username, auth.role);
   const permissions = getRolePermissions(effectiveRole);
 
-  // Zakładki dostępne dla każdego (Automatyzacja, a bezpośrednio pod nią Raporty)
+  // Zakładki dostępne dla każdego (Obserwowane bezpośrednio pod Przetargami)
   const alwaysAvailableItems = [
     { id: 'search', label: 'Wyszukiwarka', icon: Search },
     { id: 'automation', label: 'Automatyzacja', icon: Clock },
     { id: 'reports', label: 'Raporty', icon: FileSpreadsheet },
     { id: 'tenders', label: 'Przetargi', icon: FileText },
+    { id: 'observed', label: 'Obserwowane', icon: BookmarkCheck },
     { id: 'analytics', label: 'Statystyki', icon: BarChart3 },
   ];
 
-  // Zakładki zależne od uprawnień roli (SMTP bezpośrednio pod Keywordsami)
   const rolePanelItems = [
     { id: 'endpoints', label: 'Endpointy', icon: Globe, perm: 'ENDPOINTS' },
     { id: 'keywords', label: 'Keywordsy', icon: KeyRound, perm: 'KEYWORDS' },
@@ -129,18 +159,46 @@ export default function App() {
             {alwaysAvailableItems.map((item) => {
               const Icon = item.icon;
               const isActive = activeTab === item.id;
+              const isObservedTab = item.id === 'observed';
+
               return (
                 <button
                   key={item.id}
                   onClick={() => handleSelectTab(item.id)}
-                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition cursor-pointer ${
+                  className={`w-full flex items-center justify-between gap-2 px-4 py-3 rounded-xl font-bold text-sm transition cursor-pointer ${
                     isActive
                       ? 'bg-blue-600 text-white shadow-xs'
                       : 'bg-white text-black hover:bg-blue-50'
                   }`}
                 >
-                  <Icon size={18} />
-                  {item.label}
+                  <span className="flex items-center gap-3 min-w-0">
+                    <Icon size={18} className="shrink-0" />
+                    <span className="truncate">{item.label}</span>
+                  </span>
+
+                  {isObservedTab && observedBadge.unreadCount > 0 && (
+                    <span
+                      title={`Nowe aktualizacje: ${observedBadge.unreadCount}`}
+                      className="px-2 py-0.5 rounded-full text-[11px] font-extrabold bg-red-600 text-white shrink-0"
+                    >
+                      {observedBadge.unreadCount}
+                    </span>
+                  )}
+
+                  {isObservedTab &&
+                    observedBadge.unreadCount === 0 &&
+                    observedBadge.observedCount > 0 && (
+                      <span
+                        title={`Obserwowane przetargi: ${observedBadge.observedCount}`}
+                        className={`px-2 py-0.5 rounded-full text-[11px] font-extrabold shrink-0 ${
+                          isActive
+                            ? 'bg-white/25 text-white'
+                            : 'bg-blue-100 text-blue-800'
+                        }`}
+                      >
+                        {observedBadge.observedCount}
+                      </span>
+                    )}
                 </button>
               );
             })}
@@ -189,6 +247,7 @@ export default function App() {
         {activeTab === 'automation' && <AutomationView />}
         {activeTab === 'reports' && <ReportsView />}
         {activeTab === 'tenders' && <TendersView />}
+        {activeTab === 'observed' && <ObservedView />}
         {activeTab === 'analytics' && <AnalyticsView />}
         {activeTab === 'endpoints' && permissions.includes('ENDPOINTS') && <EndpointsView />}
         {activeTab === 'keywords' && permissions.includes('KEYWORDS') && <KeywordsView />}
