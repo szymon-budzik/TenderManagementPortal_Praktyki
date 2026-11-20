@@ -4,7 +4,6 @@ import com.przetargi.java_backend.dto.ApiEndpointDto;
 import com.przetargi.java_backend.entity.ApiEndpoint;
 import com.przetargi.java_backend.repository.ApiEndpointRepository;
 import com.przetargi.java_backend.service.TenderExecutionService;
-import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -41,14 +40,14 @@ public class AdminApiEndpointController {
     }
 
     @GetMapping
-    public ResponseEntity<List<ApiEndpointDto>> getAllEndpoints() {
-        List<ApiEndpointDto> result = endpointRepository
-                .findAll(Sort.by(Sort.Direction.ASC, "id"))
-                .stream()
-                .map(ApiEndpointDto::fromEntity)
-                .toList();
-        return ResponseEntity.ok(result);
-    }
+ public ResponseEntity<List<ApiEndpointDto>> getAllEndpoints() {
+     List<ApiEndpointDto> result = endpointRepository
+             .findAllByOrderByIdAsc()
+             .stream()
+             .map(ApiEndpointDto::fromEntity)
+             .toList();
+     return ResponseEntity.ok(result);
+ }
 
     @PostMapping
     public ResponseEntity<ApiEndpointDto> createEndpoint(@RequestBody EndpointRequest request) {

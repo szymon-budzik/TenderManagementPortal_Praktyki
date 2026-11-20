@@ -101,10 +101,11 @@ public class KeywordCategoryController {
                 trimmed = trimmed.substring(0, trimmed.length() - ":WILDCARD".length()).trim();
             }
 
+            String word;
             String base;
             int colonIdx = trimmed.lastIndexOf(':');
             if (colonIdx > 0) {
-                String word = trimmed.substring(0, colonIdx).trim();
+                word = trimmed.substring(0, colonIdx).trim();
                 String suffix = trimmed.substring(colonIdx + 1).trim().toUpperCase();
                 if (word.isEmpty()) {
                     continue;
@@ -120,10 +121,12 @@ public class KeywordCategoryController {
                     }
                 }
             } else {
-                base = trimmed + ":50";
+                word = trimmed;
+                base = word + ":50";
             }
 
-            formatted.add(isWildcard ? base + ":WILDCARD" : base);
+            boolean allowWildcard = isWildcard && word.length() > 1 && word.endsWith("*");
+            formatted.add(allowWildcard ? base + ":WILDCARD" : base);
         }
 
         if (formatted.isEmpty()) {

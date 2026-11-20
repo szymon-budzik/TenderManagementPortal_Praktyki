@@ -12,6 +12,12 @@ import {
   Settings,
 } from 'lucide-react';
 
+function hasWildcardSuffix(word) {
+  if (!word) return false;
+  const trimmed = word.trim();
+  return trimmed.length > 1 && trimmed.endsWith('*');
+}
+
 export function parseKeywordsString(raw) {
   if (!raw) return [];
   return raw
@@ -31,29 +37,36 @@ export function parseKeywordsString(raw) {
       if (idx > 0) {
         const word = current.substring(0, idx).trim();
         const val = current.substring(idx + 1).trim().toUpperCase();
+        const validWildcard = isWildcard && hasWildcardSuffix(word);
         if (val === 'EXCLUDED') {
-          return { word, score: 50, isExcluded: true, isWildcard };
+          return { word, score: 50, isExcluded: true, isWildcard: validWildcard };
         }
         const parsedScore = parseInt(val, 10);
         return {
           word,
           score: Number.isNaN(parsedScore) ? 50 : Math.max(1, Math.min(100, parsedScore)),
           isExcluded: false,
-          isWildcard,
+          isWildcard: validWildcard,
         };
       }
-      return { word: current, score: 50, isExcluded: false, isWildcard };
+      return {
+        word: current,
+        score: 50,
+        isExcluded: false,
+        isWildcard: isWildcard && hasWildcardSuffix(current),
+      };
     });
 }
 
 export function serializeKeywordsList(list) {
   return list
-    .map(
-      (k) =>
-        `${k.word.trim()}:${k.isExcluded ? 'EXCLUDED' : k.score}${
-          k.isWildcard ? ':WILDCARD' : ''
-        }`
-    )
+    .map((k) => {
+      const cleanWord = k.word.trim();
+      const validWildcard = Boolean(k.isWildcard && hasWildcardSuffix(cleanWord));
+      return `${cleanWord}:${k.isExcluded ? 'EXCLUDED' : k.score}${
+        validWildcard ? ':WILDCARD' : ''
+      }`;
+    })
     .join(', ');
 }
 
@@ -147,20 +160,30 @@ export default function KeywordsView() {
       word: kwObj.word,
       score: kwObj.score,
       isExcluded: kwObj.isExcluded,
-      isWildcard: Boolean(kwObj.isWildcard),
+      isWildcard: Boolean(kwObj.isWildcard && hasWildcardSuffix(kwObj.word)),
+    });
+  };
+
+  const handleSelectedWordChange = (nextWord) => {
+    setSelectedKeyword((prev) => {
+      if (!prev) return prev;
+      const canBeWildcard = hasWildcardSuffix(nextWord);
+      return {
+        ...prev,
+        word: nextWord,
+        isWildcard: canBeWildcard ? prev.isWildcard : false,
+      };
     });
   };
 
   const handleToggleWildcard = (checked) => {
     setSelectedKeyword((prev) => {
       if (!prev) return prev;
-      let nextWord = prev.word.trim();
-      if (checked && nextWord && !nextWord.endsWith('*')) {
-        nextWord = `${nextWord}*`;
+      if (checked && !hasWildcardSuffix(prev.word)) {
+        return prev;
       }
       return {
         ...prev,
-        word: nextWord,
         isWildcard: checked,
       };
     });
@@ -174,11 +197,14 @@ export default function KeywordsView() {
     const list = parseKeywordsString(cat.keywords);
     if (!list[selectedKeyword.wordIndex]) return;
 
+    const cleanWord = selectedKeyword.word.trim();
+    const validWildcard = Boolean(selectedKeyword.isWildcard && hasWildcardSuffix(cleanWord));
+
     list[selectedKeyword.wordIndex] = {
-      word: selectedKeyword.word.trim(),
+      word: cleanWord,
       score: selectedKeyword.isExcluded ? 50 : Number(selectedKeyword.score),
       isExcluded: Boolean(selectedKeyword.isExcluded),
-      isWildcard: Boolean(selectedKeyword.isWildcard),
+      isWildcard: validWildcard,
     };
 
     try {
@@ -195,7 +221,7 @@ export default function KeywordsView() {
     }
   };
 
-  // Zbiorcze ustawienie trybu dla wszystkich słów w kategorii: 'NEUTRAL' | 'EXCLUDED' | 'WILDCARD'
+  // Zbiorcze ustawienie trybu: 'NEUTRAL' | 'EXCLUDED' | 'WILDCARD' | 'EXCLUDED_WILDCARD'
   const handleBulkUpdateCategoryKeywords = async (cat, mode) => {
     const list = parseKeywordsString(cat.keywords);
     if (list.length === 0) {
@@ -204,7 +230,7 @@ export default function KeywordsView() {
     }
 
     const updatedList = list.map((kw) => {
-      const trimmedWord = kw.word.trim();
+      const canBeWildcard = hasWildcardSuffix(kw.word);
       if (mode === 'NEUTRAL') {
         return {
           ...kw,
@@ -219,12 +245,20 @@ export default function KeywordsView() {
           isWildcard: false,
         };
       }
-      // mode === 'WILDCARD'
-      const wordWithStar = trimmedWord.endsWith('*') ? trimmedWord : `${trimmedWord}*`;
+      if (mode === 'WILDCARD') {
+        // Tylko słowa z gwiazdką na końcu mogą dostać wildcard
+        if (!canBeWildcard) return kw;
+        return {
+          ...kw,
+          isExcluded: false,
+          isWildcard: true,
+        };
+      }
+      // mode === 'EXCLUDED_WILDCARD'
+      if (!canBeWildcard) return kw;
       return {
         ...kw,
-        word: wordWithStar,
-        isExcluded: false,
+        isExcluded: true,
         isWildcard: true,
       };
     });
@@ -337,6 +371,11 @@ export default function KeywordsView() {
     .map((w) => w.trim())
     .filter(Boolean);
 
+  const selectedCanBeWildcard = selectedKeyword ? hasWildcardSuffix(selectedKeyword.word) : false;
+  const selectedIsExcludedWildcard = Boolean(
+    selectedKeyword?.isExcluded && selectedKeyword?.isWildcard && selectedCanBeWildcard
+  );
+
   return (
     <div className="space-y-6 text-black">
       {confirmDialog && (
@@ -357,7 +396,7 @@ export default function KeywordsView() {
         <div>
           <h2 className="text-2xl font-bold text-black">Kategorie i Wagi Słów Kluczowych</h2>
           <p className="text-xs font-semibold text-black">
-            Utwórz kategorię ze słowami kluczowymi (np. dostaw*), kliknij pojedyncze słowo lub użyj zębatki, aby zbiorczo zmienić tryb wszystkich słów w kategorii.
+            Wildcard (*) można włączyć wyłącznie dla słów zakończonych gwiazdką (np. dostaw*). Połączenie wykluczenia z wildcardem oznaczane jest na bordowo jako WYKLUCZ*.
           </p>
         </div>
       </div>
@@ -420,15 +459,37 @@ export default function KeywordsView() {
       {selectedKeyword && (
         <div className="bg-white p-6 rounded-xl border-2 border-blue-600 shadow-md space-y-4">
           <div className="flex items-center justify-between border-b border-blue-100 pb-3">
-            <div>
-              <span className="text-xs font-extrabold uppercase text-blue-700">
-                Kategoria: {selectedKeyword.catName}
+            <div className="flex flex-wrap items-center gap-2.5">
+              <div>
+                <span className="text-xs font-extrabold uppercase text-blue-700">
+                  Kategoria: {selectedKeyword.catName}
+                </span>
+                <h3 className="text-lg font-extrabold text-black">
+                  Konfiguracja słowa kluczowego:{' '}
+                  <span className="underline">{selectedKeyword.word}</span>
+                </h3>
+              </div>
+
+              {/* Podgląd na żywo jak będzie wyglądał tag po zapisie */}
+              <span
+                className={`px-3 py-1 rounded-lg text-xs font-extrabold border-2 ${
+                  selectedIsExcludedWildcard
+                    ? 'bg-rose-900 border-rose-950 text-white'
+                    : selectedKeyword.isExcluded
+                    ? 'bg-red-400 border-red-800 text-black'
+                    : selectedKeyword.isWildcard && selectedCanBeWildcard
+                    ? 'bg-purple-300 border-purple-800 text-black'
+                    : 'bg-white border-blue-400 text-black'
+                }`}
+              >
+                {selectedIsExcludedWildcard
+                  ? `${selectedKeyword.word.trim()} (WYKLUCZ*)`
+                  : selectedKeyword.isExcluded
+                  ? `${selectedKeyword.word.trim()} (WYKLUCZ)`
+                  : `${selectedKeyword.word.trim()}: ${selectedKeyword.score}`}
               </span>
-              <h3 className="text-lg font-extrabold text-black">
-                Konfiguracja słowa kluczowego:{' '}
-                <span className="underline">{selectedKeyword.word}</span>
-              </h3>
             </div>
+
             <button
               type="button"
               onClick={() => setSelectedKeyword(null)}
@@ -447,12 +508,13 @@ export default function KeywordsView() {
                 <input
                   type="text"
                   value={selectedKeyword.word}
-                  onChange={(e) =>
-                    setSelectedKeyword({ ...selectedKeyword, word: e.target.value })
-                  }
+                  onChange={(e) => handleSelectedWordChange(e.target.value)}
                   placeholder="np. dostaw*"
                   className="w-full px-3 py-2 border border-blue-300 rounded-lg bg-white text-black font-mono text-sm font-bold"
                 />
+                <p className="text-[11px] font-semibold text-slate-600 mt-1">
+                  Usunięcie gwiazdki <span className="font-mono font-bold">*</span> z końca automatycznie wyłącza tryb Wildcard.
+                </p>
               </div>
 
               <div className="space-y-2">
@@ -466,14 +528,20 @@ export default function KeywordsView() {
                   </label>
                   <span
                     className={`px-3 py-1 rounded-lg text-sm font-extrabold border ${
-                      selectedKeyword.isExcluded
-                        ? 'bg-gray-200 border-gray-400 text-gray-500'
-                        : selectedKeyword.isWildcard
+                      selectedIsExcludedWildcard
+                        ? 'bg-rose-900 border-rose-950 text-white'
+                        : selectedKeyword.isExcluded
+                        ? 'bg-red-400 border-red-800 text-black'
+                        : selectedKeyword.isWildcard && selectedCanBeWildcard
                         ? 'bg-purple-600 border-purple-900 text-white'
                         : 'bg-blue-600 border-blue-800 text-white'
                     }`}
                   >
-                    {selectedKeyword.isExcluded ? 'Wyłączony' : `${selectedKeyword.score} pkt`}
+                    {selectedIsExcludedWildcard
+                      ? 'WYKLUCZ*'
+                      : selectedKeyword.isExcluded
+                      ? 'WYKLUCZ'
+                      : `${selectedKeyword.score} pkt`}
                   </span>
                 </div>
 
@@ -507,39 +575,73 @@ export default function KeywordsView() {
             </div>
 
             <div className="flex flex-col justify-between gap-3">
-              <label className="flex items-start gap-2.5 p-3 bg-purple-50 rounded-xl border-2 border-purple-500 cursor-pointer select-none">
+              <label
+                className={`flex items-start gap-2.5 p-3 rounded-xl border-2 select-none transition ${
+                  selectedCanBeWildcard
+                    ? 'bg-purple-50 border-purple-500 cursor-pointer'
+                    : 'bg-slate-100 border-slate-300 opacity-60 cursor-not-allowed'
+                }`}
+              >
                 <input
                   type="checkbox"
-                  checked={selectedKeyword.isWildcard}
+                  disabled={!selectedCanBeWildcard}
+                  checked={selectedKeyword.isWildcard && selectedCanBeWildcard}
                   onChange={(e) => handleToggleWildcard(e.target.checked)}
-                  className="w-5 h-5 mt-0.5 accent-purple-700 cursor-pointer shrink-0"
+                  className={`w-5 h-5 mt-0.5 accent-purple-700 shrink-0 ${
+                    selectedCanBeWildcard ? 'cursor-pointer' : 'cursor-not-allowed'
+                  }`}
                 />
                 <div>
                   <div className="font-extrabold text-sm text-black">
                     Odmiana końcówek (Wildcard *)
                   </div>
                   <div className="text-xs font-medium text-black/80 mt-0.5">
-                    Gdy słowo kończy się na <span className="font-mono font-bold">*</span> (np.{' '}
-                    <span className="font-mono font-bold">dostaw*</span>), dopasowuje dowolne końcówki: dostawa, dostawy, dostawie, dostawę.
+                    {selectedCanBeWildcard ? (
+                      <>
+                        Dopasowuje dowolne końcówki rdzenia{' '}
+                        <span className="font-mono font-bold">{selectedKeyword.word.trim()}</span>.
+                        W połączeniu z wykluczeniem odrzuca wszystkie odmiany (kolor bordowy,{' '}
+                        <span className="font-bold">WYKLUCZ*</span>).
+                      </>
+                    ) : (
+                      <>
+                        Dostępne tylko dla słów kończących się na{' '}
+                        <span className="font-mono font-bold">*</span> (dopisz{' '}
+                        <span className="font-mono font-bold">*</span> na końcu treści słowa, np.{' '}
+                        <span className="font-mono font-bold">dostaw*</span>).
+                      </>
+                    )}
                   </div>
                 </div>
               </label>
 
-              <label className="flex items-start gap-2.5 p-3 bg-white rounded-xl border-2 border-red-300 cursor-pointer select-none">
+              <label
+                className={`flex items-start gap-2.5 p-3 rounded-xl border-2 cursor-pointer select-none transition ${
+                  selectedIsExcludedWildcard
+                    ? 'bg-rose-50 border-rose-900'
+                    : 'bg-white border-red-300'
+                }`}
+              >
                 <input
                   type="checkbox"
                   checked={selectedKeyword.isExcluded}
                   onChange={(e) =>
                     setSelectedKeyword({ ...selectedKeyword, isExcluded: e.target.checked })
                   }
-                  className="w-5 h-5 mt-0.5 accent-red-600 cursor-pointer shrink-0"
+                  className={`w-5 h-5 mt-0.5 cursor-pointer shrink-0 ${
+                    selectedIsExcludedWildcard ? 'accent-rose-900' : 'accent-red-600'
+                  }`}
                 />
                 <div>
                   <div className="font-extrabold text-sm text-black">
-                    Wyklucz to słowo
+                    {selectedIsExcludedWildcard
+                      ? 'Wyklucz wszystkie odmiany (WYKLUCZ*)'
+                      : 'Wyklucz to słowo'}
                   </div>
                   <div className="text-xs font-medium text-black/80 mt-0.5">
-                    Oznacza słowo na czerwono i odrzuca cały przetarg zawierający to słowo.
+                    {selectedIsExcludedWildcard
+                      ? 'Kolor bordowy — odrzuca cały przetarg zawierający słowo z dowolną końcówką.'
+                      : 'Oznacza słowo na czerwono i odrzuca cały przetarg zawierający to słowo.'}
                   </div>
                 </div>
               </label>
@@ -572,7 +674,7 @@ export default function KeywordsView() {
         </div>
       )}
 
-      {/* Tabela kategorii (overflow-visible, aby menu zębatki nie było ucinane) */}
+      {/* Tabela kategorii */}
       <div className="bg-white rounded-xl border border-blue-200 overflow-visible shadow-xs">
         <table className="w-full text-left border-collapse text-sm">
           <thead>
@@ -648,12 +750,18 @@ export default function KeywordsView() {
                           const isSelected =
                             selectedKeyword?.catId === cat.id &&
                             selectedKeyword?.wordIndex === idx;
+                          const isExcludedWildcard = kw.isExcluded && kw.isWildcard;
 
                           let badgeStyle =
-                            'bg-blue-50 hover:bg-blue-100 border-blue-400 text-black';
-                          if (kw.isExcluded) {
-                            badgeStyle =
-                              'bg-red-400 hover:bg-red-500 border-red-800 text-black';
+                            'bg-white hover:bg-blue-50 border-blue-400 text-black';
+                          if (isExcludedWildcard) {
+                            badgeStyle = isSelected
+                              ? 'bg-rose-950 border-rose-950 text-white ring-2 ring-blue-500 ring-offset-1'
+                              : 'bg-rose-900 hover:bg-rose-950 border-rose-950 text-white';
+                          } else if (kw.isExcluded) {
+                            badgeStyle = isSelected
+                              ? 'bg-red-500 border-red-900 text-black ring-2 ring-blue-500 ring-offset-1'
+                              : 'bg-red-400 hover:bg-red-500 border-red-800 text-black';
                           } else if (kw.isWildcard) {
                             badgeStyle = isSelected
                               ? 'bg-purple-600 border-purple-900 text-white'
@@ -668,17 +776,19 @@ export default function KeywordsView() {
                               type="button"
                               onClick={() => handleSelectKeyword(cat, idx, kw)}
                               title={
-                                kw.isExcluded
-                                  ? kw.isWildcard
-                                    ? 'Wykluczone + Odmiana końcówek (*)'
-                                    : 'Słowo wykluczające'
+                                isExcludedWildcard
+                                  ? 'Wykluczone + Odmiana końcówek (WYKLUCZ*)'
+                                  : kw.isExcluded
+                                  ? 'Słowo wykluczające'
                                   : kw.isWildcard
                                   ? 'Odmiana końcówek (Wildcard *) — dopasowuje różne końcówki'
                                   : 'Kliknij, aby skonfigurować'
                               }
                               className={`px-3 py-1.5 rounded-lg text-xs font-extrabold border-2 transition transform active:scale-95 cursor-pointer ${badgeStyle}`}
                             >
-                              {kw.isExcluded
+                              {isExcludedWildcard
+                                ? `${kw.word} (WYKLUCZ*)`
+                                : kw.isExcluded
                                 ? `${kw.word} (WYKLUCZ)`
                                 : `${kw.word}: ${kw.score}`}
                             </button>
@@ -726,14 +836,14 @@ export default function KeywordsView() {
 
                     <td className="p-3.5 text-right whitespace-nowrap align-top">
                       <div className="flex items-center justify-end gap-2">
-                        {/* Zębatka — zbiorcze ustawienie trybu dla wszystkich słów kategorii */}
+                        {/* Zębatka — zbiorcze ustawienie trybu */}
                         <div className="relative" data-bulk-menu>
                           <button
                             type="button"
                             onClick={() =>
                               setOpenBulkMenuCatId(isBulkMenuOpen ? null : cat.id)
                             }
-                            title="Zbiorczo ustaw tryb dla wszystkich słów w tej kategorii"
+                            title="Zbiorczo ustaw tryb dla słów w tej kategorii"
                             className={`p-1.5 rounded-lg border transition cursor-pointer ${
                               isBulkMenuOpen
                                 ? 'bg-blue-600 border-blue-800 text-white'
@@ -744,9 +854,9 @@ export default function KeywordsView() {
                           </button>
 
                           {isBulkMenuOpen && (
-                            <div className="absolute right-0 top-full mt-1.5 w-52 bg-white rounded-xl border-2 border-blue-600 shadow-xl z-40 p-1.5 text-left space-y-1">
+                            <div className="absolute right-0 top-full mt-1.5 w-56 bg-white rounded-xl border-2 border-blue-600 shadow-xl z-40 p-1.5 text-left space-y-1">
                               <div className="px-2.5 py-1 text-[10px] font-extrabold uppercase text-blue-700 border-b border-blue-100">
-                                Ustaw wszystkie słowa jako:
+                                Ustaw słowa w kategorii jako:
                               </div>
                               <button
                                 type="button"
@@ -755,8 +865,8 @@ export default function KeywordsView() {
                                 }
                                 className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs font-extrabold text-black hover:bg-blue-50 cursor-pointer"
                               >
-                                <span className="w-3 h-3 rounded-full bg-blue-200 border-2 border-blue-500 shrink-0" />
-                                Neutralne
+                                <span className="w-3 h-3 rounded-full bg-white border-2 border-blue-500 shrink-0" />
+                                Neutralne (wszystkie)
                               </button>
                               <button
                                 type="button"
@@ -766,7 +876,7 @@ export default function KeywordsView() {
                                 className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs font-extrabold text-black hover:bg-purple-50 cursor-pointer"
                               >
                                 <span className="w-3 h-3 rounded-full bg-purple-300 border-2 border-purple-800 shrink-0" />
-                                Wildcards (*)
+                                Wildcards (tylko z *)
                               </button>
                               <button
                                 type="button"
@@ -776,7 +886,17 @@ export default function KeywordsView() {
                                 className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs font-extrabold text-black hover:bg-red-50 cursor-pointer"
                               >
                                 <span className="w-3 h-3 rounded-full bg-red-400 border-2 border-red-800 shrink-0" />
-                                Wykluczone
+                                Wykluczone (wszystkie)
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleBulkUpdateCategoryKeywords(cat, 'EXCLUDED_WILDCARD')
+                                }
+                                className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs font-extrabold text-black hover:bg-rose-50 cursor-pointer"
+                              >
+                                <span className="w-3 h-3 rounded-full bg-rose-900 border-2 border-rose-950 shrink-0" />
+                                WYKLUCZ* (tylko z *)
                               </button>
                             </div>
                           )}

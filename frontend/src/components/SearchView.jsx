@@ -316,27 +316,38 @@ export default function SearchView() {
                     </div>
 
                     <div className="flex flex-wrap gap-1.5 mt-2">
-                      {parsedWords.map((kw, idx) => (
-                        <span
-                          key={idx}
-                          title={
-                            kw.isExcluded
-                              ? 'Słowo wykluczające'
-                              : kw.isWildcard
-                              ? 'Odmiana końcówek (Wildcard *)'
-                              : `Waga: ${kw.score} pkt`
-                          }
-                          className={`px-2.5 py-0.5 rounded text-xs font-extrabold border ${
-                            kw.isExcluded
-                              ? 'bg-red-400 border-red-800 text-black'
-                              : kw.isWildcard
-                              ? 'bg-purple-300 border-purple-800 text-black'
-                              : 'bg-white border-blue-300 text-black'
-                          }`}
-                        >
-                          {kw.isExcluded ? kw.word : `${kw.word}: ${kw.score}`}
-                        </span>
-                      ))}
+                      {parsedWords.map((kw, idx) => {
+                        const isExcludedWildcard = kw.isExcluded && kw.isWildcard;
+                        return (
+                          <span
+                            key={idx}
+                            title={
+                              isExcludedWildcard
+                                ? 'Wykluczone + Odmiana końcówek (WYKLUCZ*)'
+                                : kw.isExcluded
+                                ? 'Słowo wykluczające'
+                                : kw.isWildcard
+                                ? 'Odmiana końcówek (Wildcard *)'
+                                : `Waga: ${kw.score} pkt`
+                            }
+                            className={`px-2.5 py-0.5 rounded text-xs font-extrabold border ${
+                              isExcludedWildcard
+                                ? 'bg-rose-900 border-rose-950 text-white'
+                                : kw.isExcluded
+                                ? 'bg-red-400 border-red-800 text-black'
+                                : kw.isWildcard
+                                ? 'bg-purple-300 border-purple-800 text-black'
+                                : 'bg-white border-blue-300 text-black'
+                            }`}
+                          >
+                            {isExcludedWildcard
+                              ? `${kw.word} (WYKLUCZ*)`
+                              : kw.isExcluded
+                              ? `${kw.word} (WYKLUCZ)`
+                              : `${kw.word}: ${kw.score}`}
+                          </span>
+                        );
+                      })}
                     </div>
                   </div>
                 </label>

@@ -7,4 +7,5 @@ import java.util.List;
 
 public interface ApiEndpointRepository extends JpaRepository<ApiEndpoint, Long> {
     List<ApiEndpoint> findByIsActiveTrue();
+    List<ApiEndpoint> findAllByOrderByIdAsc();
 }
