@@ -41,4 +41,7 @@ public class ApiEndpoint {
 
     @Column(name = "created_at", insertable = false, updatable = false)
     private OffsetDateTime createdAt;
+
+    @Column(name = "link_template", columnDefinition = "TEXT")
+    private String linkTemplate;
 }

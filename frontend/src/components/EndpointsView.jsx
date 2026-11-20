@@ -19,11 +19,22 @@ import {
   Copy,
   StickyNote,
   Save,
+  Link2,
 } from 'lucide-react';
 
 const PAGE_SIZE = 10;
 
 const SCRAPER_PRESETS = ['table tr', 'table td', 'table, td', 'article', '.tender, .notice'];
+
+const DATE_TOKENS = [
+  '{TODAY}',
+  '{YESTERDAY}',
+  '{TODAY-1D_START}',
+  '{TODAY_END}',
+  '{TODAY-7D}',
+  '{TODAY-7D_COMPACT}',
+  '{TODAY_COMPACT}',
+];
 
 function validateJsonString(raw) {
   const trimmed = (raw || '').trim();
@@ -108,8 +119,16 @@ function buildTestDiagnosticsMarkdown(modal) {
     `- **Tryb / Metoda:** \`${ep.httpMethod}\``,
     `- **Kod HTTP:** \`${modal.statusCode > 0 ? modal.statusCode : 'Brak / Błąd sieci'}\``,
     `- **Czas odpowiedzi:** ${modal.responseTimeMs} ms`,
-    `- **URL:** \`${ep.url}\``,
+    `- **URL (szablon):** \`${ep.url}\``,
   ];
+
+  if (modal.resolvedUrl && modal.resolvedUrl !== ep.url) {
+    lines.push(`- **URL (wywołany):** \`${modal.resolvedUrl}\``);
+  }
+
+  if (ep.linkTemplate) {
+    lines.push(`- **Szablon linku:** \`${ep.linkTemplate}\``);
+  }
 
   if (ep.payload && ep.httpMethod !== 'GET') {
     const label = ep.httpMethod === 'SCRAPER' ? 'Selektor CSS' : 'Payload JSON';
@@ -143,6 +162,7 @@ export default function EndpointsView() {
     url: '',
     httpMethod: 'GET',
     payload: '',
+    linkTemplate: '',
     isActive: true,
   });
 
@@ -261,6 +281,14 @@ export default function EndpointsView() {
     setNewEndpoint((prev) => ({ ...prev, payload: next }));
   };
 
+  const handleInsertDateToken = (token) => {
+    setNewEndpoint((prev) =>
+      prev.httpMethod === 'POST'
+        ? { ...prev, payload: (prev.payload || '') + token }
+        : { ...prev, url: (prev.url || '') + token }
+    );
+  };
+
   const handleCreate = async (e) => {
     e.preventDefault();
     if (newEndpoint.httpMethod === 'POST') {
@@ -277,8 +305,16 @@ export default function EndpointsView() {
         name: newEndpoint.name.trim(),
         url: newEndpoint.url.trim(),
         payload: finalPayload,
+        linkTemplate: newEndpoint.linkTemplate.trim() || null,
       });
-      setNewEndpoint({ name: '', url: '', httpMethod: 'GET', payload: '', isActive: true });
+      setNewEndpoint({
+        name: '',
+        url: '',
+        httpMethod: 'GET',
+        payload: '',
+        linkTemplate: '',
+        isActive: true,
+      });
       setPostTableRows([{ key: '', value: '' }]);
       setPostEditorMode('JSON');
       fetchEndpoints();
@@ -306,6 +342,7 @@ export default function EndpointsView() {
       url: ep.url,
       httpMethod: ep.httpMethod,
       payload: ep.httpMethod === 'GET' ? '' : ep.payload || '',
+      linkTemplate: ep.linkTemplate || '',
       isActive: ep.isActive,
     });
   };
@@ -319,7 +356,8 @@ export default function EndpointsView() {
     try {
       await api.put(`/admin/endpoints/${id}`, {
         ...editForm,
-        payload: editForm.httpMethod === 'GET' ? '' : editForm.payload.trim(),
+        payload: editForm.httpMethod === 'GET' ? '' : (editForm.payload || '').trim(),
+        linkTemplate: (editForm.linkTemplate || '').trim(),
       });
       setEditingId(null);
       fetchEndpoints();
@@ -361,6 +399,7 @@ export default function EndpointsView() {
         endpoint: ep,
         success: ok,
         statusCode: data.statusCode ?? 0,
+        resolvedUrl: data.resolvedUrl || ep.url,
         responseTimeMs: data.responseTimeMs ?? Date.now() - startTs,
         message: data.message || (ok ? 'Połączenie udane.' : 'Wystąpił błąd podczas testu.'),
         details: data.details || '',
@@ -368,7 +407,7 @@ export default function EndpointsView() {
       });
     } catch (err) {
       const elapsed = Date.now() - startTs;
-      const httpStatus = err.response?.status ?? 0;
+      const httpStatus = err.response?.data?.statusCode ?? err.response?.status ?? 0;
       const backendMsg =
         err.response?.data?.message ||
         err.response?.data?.error ||
@@ -380,6 +419,7 @@ export default function EndpointsView() {
         endpoint: ep,
         success: false,
         statusCode: httpStatus,
+        resolvedUrl: err.response?.data?.resolvedUrl || ep.url,
         responseTimeMs: elapsed,
         message: `Błąd wywołania testu: ${backendMsg}`,
         details: err.response?.data
@@ -422,7 +462,7 @@ export default function EndpointsView() {
     if (!noteModal) return;
     setSavingNote(true);
     try {
-      await api.put(`/admin/endpoints/${noteModal.endpoint.id}`, {
+      await api.patch(`/admin/endpoints/${noteModal.endpoint.id}/notes`, {
         notes: noteModal.text,
       });
       setNoteModal(null);
@@ -615,8 +655,13 @@ export default function EndpointsView() {
                 Testowany adres URL
               </div>
               <div className="text-xs font-mono break-all text-black">
-                {testModal.endpoint.url}
+                {testModal.resolvedUrl || testModal.endpoint.url}
               </div>
+              {testModal.resolvedUrl && testModal.resolvedUrl !== testModal.endpoint.url && (
+                <div className="text-[11px] font-mono break-all text-slate-500">
+                  Szablon: {testModal.endpoint.url}
+                </div>
+              )}
               {testModal.endpoint.payload && testModal.endpoint.httpMethod !== 'GET' && (
                 <div className="text-xs font-mono whitespace-pre-wrap break-all text-slate-700 pt-1.5 mt-1 border-t border-slate-200">
                   <span className="font-bold">
@@ -697,7 +742,7 @@ export default function EndpointsView() {
           Zarządzanie Źródłami Danych (API i Web Scraper)
         </h2>
         <p className="text-xs font-semibold text-black mt-0.5">
-          GET używa wyłącznie parametrów w URL, POST obsługuje wieloliniowy JSON i tabelę pól, a SCRAPER przyjmuje precyzyjne selektory CSS.
+          URL i Payload obsługują dynamiczne zmienne daty ({'{TODAY}'}, {'{TODAY-1D_START}'}), a opcjonalny Szablon linku ({'{objectId}'}, {'{id}'}) buduje klikalne adresy bez hardkodowania portali.
         </p>
       </div>
 
@@ -724,12 +769,12 @@ export default function EndpointsView() {
               URL Endpointu / Strony WWW
             </label>
             <input
-              type="url"
+              type="text"
               required
               value={newEndpoint.url}
               onChange={(e) => setNewEndpoint({ ...newEndpoint, url: e.target.value })}
               className="w-full px-3 py-2 border border-blue-300 rounded-lg text-black font-mono text-xs"
-              placeholder="https://..."
+              placeholder="https://... (możesz użyć np. {TODAY-1D_START})"
             />
           </div>
 
@@ -754,6 +799,42 @@ export default function EndpointsView() {
             >
               <Plus size={16} /> Dodaj Źródło
             </button>
+          </div>
+        </div>
+
+        {/* Ściągawka dynamicznych zmiennych daty + Szablon linku */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-3">
+          <div className="lg:col-span-6 p-3 bg-blue-50/70 border border-blue-200 rounded-xl space-y-1.5">
+            <div className="text-[11px] font-extrabold uppercase text-blue-900">
+              Zmienne daty (kliknij, aby wstawić do {newEndpoint.httpMethod === 'POST' ? 'Payloadu' : 'URL'})
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {DATE_TOKENS.map((token) => (
+                <button
+                  key={token}
+                  type="button"
+                  onClick={() => handleInsertDateToken(token)}
+                  title="Kliknij, aby dopisać zmienną"
+                  className="px-2 py-0.5 bg-white hover:bg-blue-100 border border-blue-400 rounded text-[11px] font-mono font-bold text-black cursor-pointer"
+                >
+                  {token}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="lg:col-span-6 p-3 bg-emerald-50/70 border border-emerald-300 rounded-xl space-y-1">
+            <label className="flex items-center gap-1.5 text-[11px] font-extrabold uppercase text-emerald-950">
+              <Link2 size={13} />
+              Szablon linku do przetargu (opcjonalny — np. {'{objectId}'}, {'{tenderId}'}, {'{id}'})
+            </label>
+            <input
+              type="text"
+              value={newEndpoint.linkTemplate}
+              onChange={(e) => setNewEndpoint({ ...newEndpoint, linkTemplate: e.target.value })}
+              placeholder="np. https://ezamowienia.gov.pl/mo-client-board/bzp/notice-details/id/{objectId}"
+              className="w-full px-3 py-1.5 border border-emerald-400 rounded-lg bg-white text-black font-mono text-xs"
+            />
           </div>
         </div>
 
@@ -842,7 +923,7 @@ export default function EndpointsView() {
                   value={newEndpoint.payload}
                   onChange={(e) => setNewEndpoint({ ...newEndpoint, payload: e.target.value })}
                   placeholder={
-                    '{\n  "query": "FT ~ (software)",\n  "fields": ["publication-number", "BT-21-Procedure"],\n  "limit": 25\n}'
+                    '{\n  "query": "publication-date >= {TODAY-7D_COMPACT}",\n  "fields": ["publication-number", "BT-21-Procedure"],\n  "limit": 25\n}'
                   }
                   className={`w-full px-3.5 py-2.5 border rounded-lg bg-white text-black font-mono text-xs leading-relaxed ${
                     newPostJsonStatus.valid ? 'border-blue-300' : 'border-red-600 bg-red-50/40'
@@ -1031,7 +1112,7 @@ export default function EndpointsView() {
                 className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
               >
                 <div className="inline-flex items-center gap-1">
-                  URL i Parametry <ArrowUpDown size={14} />
+                  URL, Szablon linku i Parametry <ArrowUpDown size={14} />
                 </div>
               </th>
               <th
@@ -1112,10 +1193,21 @@ export default function EndpointsView() {
                       {isEditing ? (
                         <div className="space-y-2">
                           <input
-                            type="url"
+                            type="text"
                             value={editForm.url}
                             onChange={(e) => setEditForm({ ...editForm, url: e.target.value })}
+                            placeholder="URL (obsługuje zmienne daty, np. {TODAY-1D_START})"
                             className="w-full px-2.5 py-1.5 border border-blue-400 rounded bg-white text-black"
+                          />
+
+                          <input
+                            type="text"
+                            value={editForm.linkTemplate || ''}
+                            onChange={(e) =>
+                              setEditForm({ ...editForm, linkTemplate: e.target.value })
+                            }
+                            placeholder="Szablon linku (opcjonalnie), np. https://.../id/{objectId}"
+                            className="w-full px-2.5 py-1.5 border border-emerald-500 rounded bg-emerald-50/40 text-black"
                           />
 
                           {editForm.httpMethod === 'GET' ? (
@@ -1181,6 +1273,15 @@ export default function EndpointsView() {
                       ) : (
                         <div className="space-y-1.5">
                           <div>{ep.url}</div>
+
+                          {ep.linkTemplate && (
+                            <div className="inline-flex items-center gap-1.5 px-2 py-0.5 bg-emerald-50 border border-emerald-400 rounded text-[11px] font-mono text-emerald-950 break-all">
+                              <Link2 size={12} className="shrink-0 text-emerald-700" />
+                              <span>
+                                <b>Link:</b> {ep.linkTemplate}
+                              </span>
+                            </div>
+                          )}
 
                           {ep.httpMethod === 'POST' && ep.payload && (
                             <pre className="text-[11px] text-black bg-blue-50/80 p-2 rounded border border-blue-200 whitespace-pre-wrap break-all max-h-28 overflow-y-auto">

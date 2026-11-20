@@ -1,6 +1,8 @@
 import { useState, useEffect, useMemo } from 'react';
 import api from '../api';
 import ConfirmModal from './ConfirmModal';
+import HighlightedText, { MatchedKeywordsSummary } from './HighlightedText';
+import VersionDiffModal from './VersionDiffModal';
 import {
   BookmarkCheck,
   RefreshCw,
@@ -18,6 +20,7 @@ import {
   Search,
   RotateCcw,
   FileSpreadsheet,
+  ArrowLeftRight,
 } from 'lucide-react';
 
 function getSourceFromDescription(desc) {
@@ -140,6 +143,10 @@ function toLocalDateTimeInputValue(iso) {
 
 export default function ObservedView() {
   const [items, setItems] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [highlightEnabled, setHighlightEnabled] = useState(true);
+  const [diffPayload, setDiffPayload] = useState(null);
+
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [search, setSearch] = useState('');
   const [onlyWithUpdates, setOnlyWithUpdates] = useState(false);
@@ -148,7 +155,6 @@ export default function ObservedView() {
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const [checkResult, setCheckResult] = useState(null);
 
-  // Zaznaczanie dowolnych kart (oryginałów i aktualizacji) pod raport
   const [selectedTenderIds, setSelectedTenderIds] = useState([]);
   const [selectedUpdateIds, setSelectedUpdateIds] = useState([]);
   const [reportName, setReportName] = useState('');
@@ -162,8 +168,12 @@ export default function ObservedView() {
 
   const fetchObserved = async () => {
     try {
-      const res = await api.get('/tenders/observed');
-      setItems(res.data || []);
+      const [obsRes, kwRes] = await Promise.all([
+        api.get('/tenders/observed'),
+        api.get('/keywords').catch(() => ({ data: [] })),
+      ]);
+      setItems(obsRes.data || []);
+      setCategories(kwRes.data || []);
     } catch (err) {
       console.error('Błąd pobierania obserwowanych przetargów:', err);
     }
@@ -346,6 +356,37 @@ export default function ObservedView() {
     setExpandedCards((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
+  const openDiffForUpdate = (tender, updates, updIdx) => {
+    const currentUpd = updates[updIdx];
+    const prevUpd = updates[updIdx + 1]; // updates są posortowane od najnowszej do najstarszej
+
+    const oldVersion = prevUpd
+      ? {
+          versionLabel: `Aktualizacja v${prevUpd.versionNumber}`,
+          title: prevUpd.title,
+          externalId: prevUpd.externalId,
+          submissionDeadline: prevUpd.submissionDeadline,
+          description: prevUpd.description,
+        }
+      : {
+          versionLabel: 'Oryginał (wersja bazowa)',
+          title: tender.title,
+          externalId: tender.externalId,
+          submissionDeadline: tender.submissionDeadline,
+          description: tender.description,
+        };
+
+    const newVersion = {
+      versionLabel: `Aktualizacja v${currentUpd.versionNumber}`,
+      title: currentUpd.title,
+      externalId: currentUpd.externalId,
+      submissionDeadline: currentUpd.submissionDeadline,
+      description: currentUpd.description,
+    };
+
+    setDiffPayload({ oldVersion, newVersion });
+  };
+
   const visibleItems = useMemo(() => {
     const filtered = items.filter((entry) => {
       const t = entry.tender;
@@ -413,6 +454,14 @@ export default function ObservedView() {
         />
       )}
 
+      {diffPayload && (
+        <VersionDiffModal
+          oldVersion={diffPayload.oldVersion}
+          newVersion={diffPayload.newVersion}
+          onClose={() => setDiffPayload(null)}
+        />
+      )}
+
       {/* Nagłówek i przycisk sprawdzania aktualizacji */}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex items-start gap-2.5">
@@ -429,7 +478,7 @@ export default function ObservedView() {
               )}
             </div>
             <p className="text-xs font-semibold text-black mt-0.5">
-              Zaznacz dowolne oryginalne lub zaktualizowane przetargi, aby wygenerować z nich gotowy raport w zakładce <b>Raporty</b>.
+              Zaznacz dowolne oryginalne lub zaktualizowane przetargi, aby wygenerować z nich raport, albo porównaj zmiany między wersjami.
             </p>
           </div>
         </div>
@@ -568,7 +617,7 @@ export default function ObservedView() {
         </div>
       )}
 
-      {/* Pasek wyszukiwania i sortowania */}
+      {/* Pasek wyszukiwania, sortowania i przełącznika podświetlania */}
       <div className="bg-white p-4 rounded-xl border border-blue-200 shadow-xs flex flex-wrap items-center gap-3">
         <div className="relative flex-1 min-w-[220px]">
           <Search size={15} className="absolute left-3 top-2.5 text-blue-600" />
@@ -599,6 +648,16 @@ export default function ObservedView() {
             className="w-4 h-4 accent-amber-600 cursor-pointer"
           />
           Tylko z aktualizacjami
+        </label>
+
+        <label className="inline-flex items-center gap-2 px-3 py-2 bg-yellow-50 border border-yellow-500 rounded-lg text-xs font-extrabold cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={highlightEnabled}
+            onChange={(e) => setHighlightEnabled(e.target.checked)}
+            className="w-4 h-4 accent-yellow-600 cursor-pointer"
+          />
+          Podświetl słowa kluczowe
         </label>
 
         {(search || onlyWithUpdates || sortBy !== 'ORDER') && (
@@ -662,7 +721,7 @@ export default function ObservedView() {
                     : 'border-slate-300 bg-white'
                 }`}
               >
-                {/* Pasek nagłówkowy całej grupy: etykieta + LICZNIK GODZIN + LINK OBOK GODZIN */}
+                {/* Nagłówek grupy */}
                 <div
                   className={`px-5 py-3 flex flex-wrap items-center justify-between gap-3 border-b-2 ${
                     hasUnread
@@ -692,7 +751,6 @@ export default function ObservedView() {
                     )}
                   </div>
 
-                  {/* Licznik godzin + edycja terminu + LINK DO PRZETARGU OBOK GODZIN */}
                   <div className="flex flex-wrap items-center gap-2">
                     {isEditingDeadline ? (
                       <div className="flex items-center gap-1.5 bg-white p-1 rounded-lg border border-blue-500">
@@ -759,7 +817,6 @@ export default function ObservedView() {
                       </>
                     )}
 
-                    {/* LINK DO PRZETARGU BEZPOŚREDNIO OBOK GODZIN */}
                     {groupLink ? (
                       <a
                         href={groupLink}
@@ -788,9 +845,9 @@ export default function ObservedView() {
                   </div>
                 </div>
 
-                {/* Wnętrze grupy: najpierw AKTUALIZACJE, bezpośrednio pod nimi ORYGINAŁ */}
+                {/* Karty: aktualizacje od najnowszej + oryginał poniżej */}
                 <div className="p-4 space-y-2">
-                  {updates.map((upd) => {
+                  {updates.map((upd, updIdx) => {
                     const updKey = `upd-${upd.id}`;
                     const updExpanded = Boolean(expandedCards[updKey]);
                     const updLink = getLinkFromDescription(upd.description) || origLink;
@@ -851,7 +908,12 @@ export default function ObservedView() {
                                 </div>
 
                                 <h3 className="text-base font-extrabold text-black leading-snug pt-0.5">
-                                  {upd.title}
+                                  <HighlightedText
+                                    text={upd.title}
+                                    categories={categories}
+                                    descriptionForFilter={tender.description}
+                                    enabled={highlightEnabled}
+                                  />
                                 </h3>
                               </div>
                             </div>
@@ -864,6 +926,13 @@ export default function ObservedView() {
                                   <Clock size={12} /> {updCountdown.label}
                                 </span>
                               )}
+                              <button
+                                type="button"
+                                onClick={() => openDiffForUpdate(tender, updates, updIdx)}
+                                className="inline-flex items-center gap-1 px-3 py-1.5 bg-amber-100 hover:bg-amber-200 border-2 border-amber-700 text-black rounded-lg text-xs font-extrabold cursor-pointer"
+                              >
+                                <ArrowLeftRight size={13} /> Porównaj ze starą wersją
+                              </button>
                               {updLink && (
                                 <a
                                   href={updLink}
@@ -910,7 +979,12 @@ export default function ObservedView() {
                               </button>
                               {updExpanded && (
                                 <pre className="mt-2 p-3 bg-slate-50 border border-blue-200 rounded-xl text-xs font-sans whitespace-pre-wrap break-words leading-relaxed max-h-72 overflow-y-auto">
-                                  {updCleanDesc}
+                                  <HighlightedText
+                                    text={updCleanDesc}
+                                    categories={categories}
+                                    descriptionForFilter={tender.description}
+                                    enabled={highlightEnabled}
+                                  />
                                 </pre>
                               )}
                             </div>
@@ -973,7 +1047,12 @@ export default function ObservedView() {
                           </div>
 
                           <h3 className="text-base font-extrabold text-black leading-snug pt-0.5">
-                            {tender.title}
+                            <HighlightedText
+                              text={tender.title}
+                              categories={categories}
+                              descriptionForFilter={tender.description}
+                              enabled={highlightEnabled}
+                            />
                           </h3>
                         </div>
                       </div>
@@ -1006,11 +1085,23 @@ export default function ObservedView() {
                       </div>
                     </div>
 
+                    <MatchedKeywordsSummary
+                      text={`${tender.title || ''}\n${origCleanDesc}`}
+                      categories={categories}
+                      descriptionForFilter={tender.description}
+                      enabled={highlightEnabled}
+                    />
+
                     {origCleanDesc && (
                       <div className="space-y-1.5">
                         {!origExpanded && (
                           <div className="text-xs text-black/80 line-clamp-3 whitespace-pre-line bg-slate-50 p-2.5 rounded-lg border border-slate-200">
-                            {origCleanDesc}
+                            <HighlightedText
+                              text={origCleanDesc}
+                              categories={categories}
+                              descriptionForFilter={tender.description}
+                              enabled={highlightEnabled}
+                            />
                           </div>
                         )}
                         <button
@@ -1030,7 +1121,12 @@ export default function ObservedView() {
                         </button>
                         {origExpanded && (
                           <pre className="p-3.5 bg-slate-50 border border-blue-200 rounded-xl text-xs font-sans whitespace-pre-wrap break-words leading-relaxed max-h-80 overflow-y-auto">
-                            {origCleanDesc}
+                            <HighlightedText
+                              text={origCleanDesc}
+                              categories={categories}
+                              descriptionForFilter={tender.description}
+                              enabled={highlightEnabled}
+                            />
                           </pre>
                         )}
                       </div>

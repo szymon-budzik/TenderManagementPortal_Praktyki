@@ -12,6 +12,7 @@ import KeywordsView from './components/KeywordsView';
 import SmtpView from './components/SmtpView';
 import UsersView from './components/UsersView';
 import NotificationsBell from './components/NotificationsBell';
+import ConfigBackupModal from './components/ConfigBackupModal';
 import {
   Search,
   Clock,
@@ -24,6 +25,7 @@ import {
   KeyRound,
   Mail,
   LogOut,
+  Database,
 } from 'lucide-react';
 import { getEffectiveUserRole, getRolePermissions } from './rolesStore';
 
@@ -44,6 +46,8 @@ export default function App() {
   });
 
   const [observedBadge, setObservedBadge] = useState({ observedCount: 0, unreadCount: 0 });
+  const [backupModalOpen, setBackupModalOpen] = useState(false);
+  const [viewRefreshKey, setViewRefreshKey] = useState(0);
   const [, setTick] = useState(0);
 
   const handleSelectTab = (tabId) => {
@@ -122,7 +126,6 @@ export default function App() {
   const effectiveRole = getEffectiveUserRole(auth.username, auth.role);
   const permissions = getRolePermissions(effectiveRole);
 
-  // Zakładki dostępne dla każdego (Obserwowane bezpośrednio pod Przetargami)
   const alwaysAvailableItems = [
     { id: 'search', label: 'Wyszukiwarka', icon: Search },
     { id: 'automation', label: 'Automatyzacja', icon: Clock },
@@ -141,6 +144,16 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex bg-slate-50 text-black">
+      {backupModalOpen && (
+        <ConfigBackupModal
+          onClose={() => setBackupModalOpen(false)}
+          onImported={() => {
+            setViewRefreshKey((k) => k + 1);
+            fetchObservedBadge();
+          }}
+        />
+      )}
+
       <aside className="w-64 bg-white border-r-2 border-blue-600 flex flex-col justify-between shrink-0">
         <div>
           <div className="p-6 border-b border-blue-100">
@@ -226,6 +239,15 @@ export default function App() {
                     </button>
                   );
                 })}
+
+                <button
+                  type="button"
+                  onClick={() => setBackupModalOpen(true)}
+                  className="w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition cursor-pointer bg-emerald-50 text-black border border-emerald-400 hover:bg-emerald-100"
+                >
+                  <Database size={18} className="text-emerald-700" />
+                  Backup JSON
+                </button>
               </div>
             )}
           </nav>
@@ -242,7 +264,7 @@ export default function App() {
         </div>
       </aside>
 
-      <main className="flex-1 p-8 overflow-y-auto">
+      <main key={viewRefreshKey} className="flex-1 p-8 overflow-y-auto">
         {activeTab === 'search' && <SearchView />}
         {activeTab === 'automation' && <AutomationView />}
         {activeTab === 'reports' && <ReportsView />}

@@ -82,6 +82,13 @@ public class TenderExecutionService {
             "(\\d{4}-\\d{2}-\\d{2}(?:[T\\s]\\d{2}:\\d{2}(?::\\d{2})?(?:Z|[+-]\\d{2}:?\\d{2})?)?|\\d{2}[.\\-/]\\d{2}[.\\-/]\\d{4}(?:[\\s,]+(?:godz\\.?\\s*)?\\d{2}:\\d{2}(?::\\d{2})?)?)"
     );
 
+    private static final Pattern DYNAMIC_DATE_TOKEN_PATTERN = Pattern.compile(
+            "\\{(TODAY|YESTERDAY|TOMORROW|NOW)(?:([+-])(\\d+)D)?(?:_(COMPACT|START|END|ISO))?\\}",
+            Pattern.CASE_INSENSITIVE
+    );
+
+    private static final Pattern LINK_PLACEHOLDER_PATTERN = Pattern.compile("\\{([^{}]+)\\}");
+
     private final ApiEndpointRepository endpointRepository;
     private final KeywordCategoryRepository keywordCategoryRepository;
     private final TenderRepository tenderRepository;
@@ -807,8 +814,9 @@ public class TenderExecutionService {
     }
 
     private List<RawItem> callPythonScraper(HttpClient client, JsonParser parser, ApiEndpoint ep) throws Exception {
+        String resolvedUrl = resolveDynamicTokens(ep.getUrl());
         String selector = ep.getPayload() != null ? ep.getPayload().trim() : "";
-        String reqJson = "{\"url\":\"" + escapeJson(ep.getUrl()) + "\",\"selector\":\"" + escapeJson(selector) + "\"}";
+        String reqJson = "{\"url\":\"" + escapeJson(resolvedUrl) + "\",\"selector\":\"" + escapeJson(selector) + "\"}";
 
         HttpRequest req = HttpRequest.newBuilder()
                 .uri(URI.create(scraperServiceUrl + "/scrape"))
@@ -839,15 +847,17 @@ public class TenderExecutionService {
     }
 
     private List<RawItem> callStandardHttpApiWithPagination(HttpClient client, JsonParser parser, ApiEndpoint ep) throws Exception {
+        String resolvedUrl = resolveDynamicTokens(ep.getUrl());
         HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
-                .uri(URI.create(ep.getUrl()))
+                .uri(URI.create(resolvedUrl))
                 .timeout(Duration.ofSeconds(15))
                 .header("Accept", "application/json")
                 .header("User-Agent", "TenderSearchEngine/1.0");
 
         if ("POST".equalsIgnoreCase(ep.getHttpMethod())) {
-            String payload = (ep.getPayload() != null && !ep.getPayload().isBlank()) ? ep.getPayload() : "{}";
-            reqBuilder.header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(payload));
+            String rawPayload = (ep.getPayload() != null && !ep.getPayload().isBlank()) ? ep.getPayload() : "{}";
+            String resolvedPayload = resolveDynamicTokens(rawPayload);
+            reqBuilder.header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(resolvedPayload));
         } else {
             reqBuilder.GET();
         }
@@ -856,7 +866,7 @@ public class TenderExecutionService {
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
             throw new IllegalArgumentException("Błąd HTTP " + response.statusCode());
         }
-        return extractItems(parser, response.body(), ep.getName());
+        return extractItems(parser, response.body(), ep.getName(), ep.getLinkTemplate());
     }
 
     public ExcelExportResult generateExcelForRuns(List<Long> runIds) throws Exception {
@@ -1046,22 +1056,22 @@ public class TenderExecutionService {
 
     private record JsonRecord(Map<?, ?> fields) {}
 
-    private List<RawItem> extractItems(JsonParser parser, String body, String sourceName) {
+    private List<RawItem> extractItems(JsonParser parser, String body, String sourceName, String linkTemplate) {
         if (body == null || body.isBlank()) return List.of();
         String trimmed = body.trim();
         List<RawItem> result = new ArrayList<>();
 
         if (trimmed.startsWith("[")) {
             for (Object obj : parser.parseList(trimmed)) {
-                if (obj instanceof Map<?, ?> mapObj) result.add(toRawItem(mapObj, sourceName));
+                if (obj instanceof Map<?, ?> mapObj) result.add(toRawItem(mapObj, sourceName, linkTemplate));
             }
         } else if (trimmed.startsWith("{")) {
             var root = parser.parseMap(trimmed);
             List<JsonRecord> itemsList = findBestObjectList(root, 0);
             if (!itemsList.isEmpty()) {
-                for (JsonRecord item : itemsList) result.add(toRawItem(item.fields(), sourceName));
+                for (JsonRecord item : itemsList) result.add(toRawItem(item.fields(), sourceName, linkTemplate));
             } else if (!root.isEmpty()) {
-                result.add(toRawItem(root, sourceName));
+                result.add(toRawItem(root, sourceName, linkTemplate));
             }
         }
         return result;
@@ -1085,13 +1095,14 @@ public class TenderExecutionService {
         return bestList;
     }
 
-    private RawItem toRawItem(Map<?, ?> rawMap, String sourceName) {
+    private RawItem toRawItem(Map<?, ?> rawMap, String sourceName, String linkTemplate) {
         Map<String, String> flatFields = new LinkedHashMap<>();
         flattenMap(rawMap, "", flatFields, 0);
 
         String extId = extractGenericId(flatFields);
         String title = extractGenericTitle(flatFields);
-        String tenderLink = extractGenericLink(flatFields);
+        String templateLink = applyLinkTemplate(linkTemplate, flatFields);
+        String tenderLink = templateLink != null ? templateLink : extractGenericLink(flatFields);
         OffsetDateTime submissionDeadline = extractGenericDeadline(flatFields);
         String groupKey = extractGenericGroupKey(flatFields, title);
 
@@ -1118,6 +1129,106 @@ public class TenderExecutionService {
         String descStr = details.toString().trim();
         if (submissionDeadline == null) submissionDeadline = extractDeadlineFromText(descStr);
         return new RawItem(extId, title, descStr, submissionDeadline, groupKey);
+    }
+
+    /**
+     * Podmienia dynamiczne zmienne daty w URL i payloadzie (strefa Europe/Warsaw):
+     * {TODAY}, {YESTERDAY}, {TOMORROW}, {TODAY-7D}, {TODAY+3D},
+     * {TODAY_COMPACT}, {TODAY-7D_COMPACT}, {TODAY_START}, {TODAY_END}, {TODAY-1D_START}, {NOW_ISO}
+     */
+    public String resolveDynamicTokens(String raw) {
+        if (raw == null || raw.isBlank() || !raw.contains("{")) {
+            return raw;
+        }
+        ZonedDateTime nowPl = ZonedDateTime.now(POLAND_ZONE);
+        Matcher matcher = DYNAMIC_DATE_TOKEN_PATTERN.matcher(raw);
+        StringBuilder sb = new StringBuilder();
+
+        while (matcher.find()) {
+            String base = matcher.group(1).toUpperCase();
+            String sign = matcher.group(2);
+            String daysStr = matcher.group(3);
+            String format = matcher.group(4) != null ? matcher.group(4).toUpperCase() : "";
+
+            LocalDate date = nowPl.toLocalDate();
+            if ("YESTERDAY".equals(base)) {
+                date = date.minusDays(1);
+            } else if ("TOMORROW".equals(base)) {
+                date = date.plusDays(1);
+            }
+            if (sign != null && daysStr != null) {
+                long offset = Long.parseLong(daysStr);
+                date = "-".equals(sign) ? date.minusDays(offset) : date.plusDays(offset);
+            }
+
+            String replacement;
+            if ("NOW".equals(base) || "ISO".equals(format)) {
+                replacement = nowPl.toLocalDateTime().format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"));
+            } else if ("COMPACT".equals(format)) {
+                replacement = date.format(DateTimeFormatter.BASIC_ISO_DATE);
+            } else if ("START".equals(format)) {
+                replacement = date.format(DateTimeFormatter.ISO_LOCAL_DATE) + "T00:00:00";
+            } else if ("END".equals(format)) {
+                replacement = date.format(DateTimeFormatter.ISO_LOCAL_DATE) + "T23:59:59";
+            } else {
+                replacement = date.format(DateTimeFormatter.ISO_LOCAL_DATE);
+            }
+            matcher.appendReplacement(sb, Matcher.quoteReplacement(replacement));
+        }
+        matcher.appendTail(sb);
+        return sb.toString();
+    }
+
+    /**
+     * Buduje klikalny link z konfigurowalnego szablonu endpointu, np.
+     * https://ezamowienia.gov.pl/mo-client-board/bzp/notice-details/id/{objectId}
+     */
+    private String applyLinkTemplate(String template, Map<String, String> flatFields) {
+        if (template == null || template.isBlank() || flatFields == null || flatFields.isEmpty()) {
+            return null;
+        }
+        Matcher matcher = LINK_PLACEHOLDER_PATTERN.matcher(template.trim());
+        StringBuilder sb = new StringBuilder();
+        boolean foundAnyPlaceholder = false;
+
+        while (matcher.find()) {
+            foundAnyPlaceholder = true;
+            String fieldName = matcher.group(1).trim();
+            String value = resolveFieldFromFlatMap(flatFields, fieldName);
+            if (value == null || value.isBlank()) {
+                return null;
+            }
+            matcher.appendReplacement(sb, Matcher.quoteReplacement(value.trim()));
+        }
+        matcher.appendTail(sb);
+
+        if (!foundAnyPlaceholder) {
+            return isUrl(template.trim()) ? template.trim() : null;
+        }
+        String resolved = sb.toString().trim();
+        return isUrl(resolved) ? resolved : null;
+    }
+
+    private String resolveFieldFromFlatMap(Map<String, String> flatFields, String fieldName) {
+        if (fieldName == null || fieldName.isBlank()) return null;
+        String targetLower = fieldName.toLowerCase();
+        String targetCompact = targetLower.replace("_", "").replace("-", "");
+
+        // 1. Dokładne dopasowanie pełnej ścieżki (np. "objectId" lub "attributes.slug")
+        for (Map.Entry<String, String> e : flatFields.entrySet()) {
+            if (e.getKey().equalsIgnoreCase(fieldName) && e.getValue() != null && !e.getValue().isBlank()) {
+                return e.getValue();
+            }
+        }
+        // 2. Dopasowanie po nazwie liścia (np. "publication-number", "id", "tenderId")
+        for (Map.Entry<String, String> e : flatFields.entrySet()) {
+            String leaf = extractLeafKey(e.getKey());
+            if ((leaf.equals(targetLower) || leaf.replace("_", "").replace("-", "").equals(targetCompact))
+                    && e.getValue() != null && !e.getValue().isBlank()) {
+                return e.getValue();
+            }
+        }
+        return null;
     }
 
     private void flattenMap(Map<?, ?> map, String prefix, Map<String, String> out, int depth) {

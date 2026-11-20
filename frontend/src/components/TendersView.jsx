@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import api from '../api';
 import ConfirmModal from './ConfirmModal';
+import HighlightedText, { MatchedKeywordsSummary } from './HighlightedText';
 import {
   Search,
   RotateCcw,
@@ -779,7 +780,11 @@ export default function TendersView() {
                   </span>
                 </div>
                 <h3 className="text-xl font-extrabold text-black mt-2">
-                  {selectedTender.title}
+                  <HighlightedText
+                    text={selectedTender.title}
+                    categories={categories}
+                    descriptionForFilter={selectedTender.description}
+                  />
                 </h3>
               </div>
               <button
@@ -864,12 +869,26 @@ export default function TendersView() {
               </div>
             </div>
 
+            <MatchedKeywordsSummary
+              text={`${selectedTender.title || ''}\n${selectedTender.description || ''}`}
+              categories={categories}
+              descriptionForFilter={selectedTender.description}
+            />
+
             <div className="space-y-2">
               <div className="text-xs font-extrabold uppercase">
                 Pełne szczegóły i metadane ogłoszenia
               </div>
               <div className="p-4 bg-slate-50 border border-blue-200 rounded-xl text-sm whitespace-pre-line leading-relaxed font-medium">
-                {selectedTender.description || 'Brak dodatkowego opisu dla tego przetargu.'}
+                {selectedTender.description ? (
+                  <HighlightedText
+                    text={selectedTender.description}
+                    categories={categories}
+                    descriptionForFilter={selectedTender.description}
+                  />
+                ) : (
+                  'Brak dodatkowego opisu dla tego przetargu.'
+                )}
               </div>
             </div>
 
