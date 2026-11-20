@@ -1,20 +1,45 @@
 # System Zarządzania i Automatyzacji Przetargów (Tender Management Portal)
 
-Zintegrowana platforma webowa służąca do automatycznego pozyskiwania ogłoszeń przetargowych z zewnętrznych źródeł API (GET/POST) oraz stron internetowych (Web Scraper), wielokryterialnej oceny punktowej (*Scoring*) z podziałem na kategorie, harmonogramowania zadań (*Cron*) oraz eksportu i wysyłki raportów Excel (`.xlsx`) na wskazane adresy e-mail.
+Zintegrowana platforma webowa do automatycznego monitorowania ogłoszeń przetargowych z zewnętrznych źródeł API (GET/POST) oraz stron internetowych (Web Scraper), wielokryterialnej oceny punktowej (*Scoring*), śledzenia zmian i terminów składania ofert w obserwowanych postępowaniach, harmonogramowania zadań (*Cron*) oraz eksportu i wysyłki raportów Excel (`.xlsx`).
 
 ---
 
-## 1. Architektura Systemu
+## 1. Główne Funkcjonalności
 
-System składa się z 4 współpracujących ze sobą kontenerów uruchamianych za pomocą **Docker Compose**:
-* **`frontend`** (`port 5173 -> 80`) – aplikacja kliencka SPA (React + Vite + Tailwind CSS) serwowana przez serwer Nginx.
-* **`java-backend`** (`port 8080`) – główny serwer aplikacyjny REST API (Java 21 + Spring Boot 3 + Spring Security JWT + Flyway).
-* **`ingestion-worker`** (`port 8000`) – mikroserwis w języku Python (FastAPI + BeautifulSoup4 + Pandas + OpenPyXL) odpowiadający za Web Scraping stron HTML oraz generowanie i wysyłkę arkuszy Excel (`.xlsx`).
-* **`postgres`** (`port 5432`) – relacyjna baza danych PostgreSQL 16 przechowująca przetargi, kategorie słów kluczowych, profile automatyzacji, historię pobrań oraz użytkowników.
+* **Agnostyczny silnik źródeł danych (0% hardkodowania portali):**
+  * Obsługa **API GET**, **API POST** (edytor JSON z walidacją/formatowaniem oraz tryb tabeli klucz–wartość) i **Web Scrapera** (BeautifulSoup4 + własne selektory CSS).
+  * **Dynamiczne zmienne daty** w URL i payloadzie (np. `{TODAY}`, `{YESTERDAY}`, `{TODAY-1D_START}`, `{TODAY_END}`, `{TODAY-7D_COMPACT}`), automatycznie rozwiązywane w strefie `Europe/Warsaw`.
+  * **Konfigurowalne szablony linków (`linkTemplate`)** budujące klikalne adresy na podstawie dowolnego pola z odpowiedzi JSON (np. `{objectId}`, `{tenderId}`, `{id}`).
+  * Testowanie połączenia bez zapisu do bazy (diagnostyka HTTP z eksportem do Markdown) oraz notatki robocze przypisane do endpointów.
+* **Scoring wielokategorialny i Keyword Highlighter:**
+  * Własne wagi punktowe (`1–100 pkt`), wykluczenia o najwyższym priorytecie, obsługa wieloznaczników (`*` / wildcard) oraz trybów dopasowania `OR` / `AND` per kategoria.
+  * Kolorowe podświetlanie trafionych słów kluczowych (**Keyword Highlighter**) i legenda trafień w szczegółach przetargów.
+* **Moduł „Obserwowane” (śledzenie zmian i terminów):**
+  * Dedykowana zakładka z licznikiem na żywo w pasku bocznym dla postępowań oznaczonych jako `INTERESTED`.
+  * Odliczanie czasu do terminu składania ofert **w godzinach** (aktualizowane na żywo) z możliwością ręcznej korekty daty i szybkim linkiem obok licznika.
+  * Grupowanie wykrytych aktualizacji bezpośrednio nad bazowym ogłoszeniem, dedykowane sprawdzanie zmian wyłącznie dla obserwowanych przetargów oraz **wizualne porównanie wersji (Diff „Przed / Po”)**.
+  * Możliwość zaznaczenia dowolnych oryginałów i aktualizacji w celu utworzenia gotowego raportu w zakładce **Raporty**.
+* **Automatyzacja, Powiadomienia i Raporty Excel:**
+  * Wieloprofilowy harmonogram **CRON** (wybrane dni/godziny lub interwały minutowe), obsługa wielu kont **SMTP** oraz dzwoneczek powiadomień o wynikach automatycznych uruchomień.
+  * Eksport wybranych pobrań i raportów z Obserwowanych do datowanego pliku `.xlsx` (klikalne hiperłącza, źródło endpointa, oczyszczone szczegóły, autofiltr i zamrożony nagłówek) oraz ręczna lub automatyczna wysyłka e-mail.
+* **Zarządzanie rolami i Backup JSON:**
+  * Autoryzacja JWT i kontrola dostępu oparta na rolach (RBAC).
+  * Pełny **eksport i import konfiguracji (Backup JSON)** obejmujący endpointy, kategorie słów kluczowych i profile automatyzacji (tryb `MERGE` lub `REPLACE` z automatycznym przemapowaniem ID).
 
 ---
 
-## 2. Zmienne Środowiskowe
+## 2. Architektura Systemu
+
+System składa się z 4 współpracujących kontenerów uruchamianych przez **Docker Compose**:
+
+* **`frontend`** (`port 5173 -> 80`) – aplikacja kliencka SPA (React + Vite + Tailwind CSS + Lucide) serwowana przez Nginx.
+* **`java-backend`** (`port 8080`) – główny serwer aplikacyjny REST API (Java 21 + Spring Boot + Spring Security JWT + Flyway `V1–V14`).
+* **`ingestion-worker`** (`port 8000`) – mikroserwis Python (FastAPI + BeautifulSoup4 + Pandas + OpenPyXL) realizujący Web Scraping HTML, generowanie arkuszy `.xlsx` oraz wysyłkę SMTP.
+* **`postgres`** (`port 5432`) – relacyjna baza danych PostgreSQL 16 przechowująca przetargi, historię ich aktualizacji (`tender_updates`), kategorie słów kluczowych, endpointy, konta SMTP, profile automatyzacji, powiadomienia, historię pobrań oraz użytkowników.
+
+---
+
+## 3. Zmienne Środowiskowe
 
 Konfiguracja środowiskowa przekazywana jest w pliku `docker-compose.yml` oraz `application.properties`:
 
@@ -37,31 +62,31 @@ Konfiguracja środowiskowa przekazywana jest w pliku `docker-compose.yml` oraz `
 
 ---
 
-## 3. Dane Dostępowe do Konta Administracyjnego
+## 4. Dane Dostępowe do Konta Administracyjnego
 
-Podczas pierwszego uruchomienia systemu komponent `DataInitializer` automatycznie tworzy domyślne konto administratora (baza startuje bez żadnych predefiniowanych przetargów ani źródeł):
+Podczas pierwszego uruchomienia systemu komponent `DataInitializer` automatycznie tworzy domyślne konto administratora (baza startuje bez predefiniowanych przetargów ani źródeł):
 
 * **Adres aplikacji:** `http://localhost:5173`
 * **Login:** `admin`
 * **Hasło:** `admin123`
-* **Rola:** `ROLE_ADMIN` (pełny dostęp do wszystkich zakładek oraz zarządzania uprawnieniami ról)
+* **Rola:** `ROLE_ADMIN` (pełny dostęp do wszystkich zakładek, zarządzania uprawnieniami ról oraz Backupu JSON)
 
 ---
 
-## 4. Instrukcja Uruchomienia Testowego
+## 5. Instrukcja Uruchomienia Testowego
 
 ### Wymagania wstępne
 * Zainstalowany i uruchomiony **Docker Desktop** (z obsługą `docker compose`).
 * Wolne porty lokalne: `5173` (Frontend), `8080` (Backend Java), `8000` (Worker Python), `5432` (PostgreSQL).
 
-### Krok 1: Uruchomienie czystego środowiska
-W głównym katalogu repozytorium (tam, gdzie znajduje się plik `docker-compose.yml`) wykonaj w terminalu:
+### Krok 1: Uruchomienie środowiska
+W głównym katalogu repozytorium wykonaj w terminalu:
 
 ```bash
 docker compose up --build -d
 ```
 
-*(Opcjonalnie: jeśli chcesz całkowicie wyczyścić istniejący wolumen bazy danych i wystartować od zera, wykonaj najpierw `docker compose down -v`, a następnie `docker compose up --build -d`).*
+*(Opcjonalnie: aby całkowicie wyczyścić wolumen bazy danych i wystartować od zera, wykonaj `docker compose down -v`, a następnie `docker compose up --build -d`).*
 
 ### Krok 2: Weryfikacja stanu kontenerów
 Sprawdź, czy wszystkie 4 serwisy mają status `Up` / `Running`:
@@ -71,18 +96,14 @@ docker compose ps
 ```
 
 ### Krok 3: Scenariusz testowy w przeglądarce
-1. Otwórz przeglądarkę pod adresem **`http://localhost:5173`** i zaloguj się na konto **`admin`** / **`admin123`**.
-2. Przejdź do zakładki **Endpointy** i dodaj źródło danych, np.:
-   * **Nazwa:** `BZP e-Zamówienia`
-   * **URL:** `https://ezamowienia.gov.pl/mo-board/api/v1/Board/Search?SortingColumnName=PublicationDate&SortingDirection=DESC&PageSize=50`
+1. Otwórz **`http://localhost:5173`** i zaloguj się na konto **`admin`** / **`admin123`**.
+2. **Endpointy** – dodaj źródło danych (lub zaimportuj gotową konfigurację przez przycisk **Backup JSON** w panelu roli), np.:
+   * **Nazwa:** `e-Zamówienia BZP`
+   * **URL:** `[https://ezamowienia.gov.pl/mo-board/api/v1/notice?NoticeType=ContractNotice&PublicationDateFrom=](https://ezamowienia.gov.pl/mo-board/api/v1/notice?NoticeType=ContractNotice&PublicationDateFrom=){TODAY-1D_START}&PublicationDateTo={TODAY_END}&PageSize=50`
    * **Tryb:** `API GET`
-   * Kliknij przycisk **Testuj** (żarówka), aby zweryfikować połączenie HTTP bez pobierania ogłoszeń do bazy.
-3. Przejdź do zakładki **Keywordsy**:
-   * Utwórz kategorię (np. `IT`) ze słowami kluczowymi po przecinku (np. `oprogramowanie, serwer, komputer, szkolenie`).
-   * Kliknij na poszczególne słowa na liście, aby przypisać im wagę punktową (`1–100 pkt`) lub zaznaczyć **Wyklucz** (słowo wykluczające ma najwyższy priorytet i odrzuca cały przetarg).
-4. Przejdź do zakładki **Wyszukiwarka**:
-   * Zaznacz dodany endpoint oraz kategorię i kliknij **Uruchom pobieranie przetargów**.
-   * System zapisze wyłącznie ogłoszenia z wynikiem `> 0 pkt` (pomijając ogłoszenia `0 pkt` oraz wykluczone).
-5. Przejdź do zakładki **Automatyzacja i Excel**:
-   * Stwórz profil automatyczny (np. `Firma IT`) z wybraną godziną uruchomienia Crona (czas polski `Europe/Warsaw`).
-   * W sekcji historii pobrań zaznacz wybrane pobrania, aby wygenerować datowany plik **`raport_przetargi_RRRR-MM-DD_GG-MM.xlsx`** lub wysłać go na wskazane adresy e-mail.
+   * **Szablon linku:** `[https://ezamowienia.gov.pl/mo-client-board/bzp/notice-details/id/](https://ezamowienia.gov.pl/mo-client-board/bzp/notice-details/id/){objectId}`
+   * Kliknij **Testuj** (żarówka), aby zweryfikować połączenie i podejrzeć wywołany adres po podstawieniu zmiennych daty.
+3. **Keywordsy** – utwórz kategorię (np. `IT`) ze słowami kluczowymi (np. `oprogramowanie*, serwer*, chmur*, szkolenie`). Kliknij na poszczególne słowa, aby ustawić wagę (`1–100 pkt`), wildcard (`*`) lub oznaczyć wykluczenie.
+4. **Wyszukiwarka** – zaznacz wybrane endpointy i kategorie, ustaw tryb dopasowania (`OR`/`AND`) i uruchom pobieranie. System zapisze wyłącznie ogłoszenia z wynikiem `> 0 pkt`.
+5. **Przetargi i Obserwowane** – otwórz dowolny przetarg, aby zobaczyć podświetlone słowa kluczowe i klikalny link. Zmień status z `NEW` na `INTERESTED`, przejdź do zakładki **Obserwowane** i przetestuj licznik godzin do terminu, przycisk **Sprawdź aktualizacje**, porównanie wersji (**Diff**) oraz tworzenie raportu z wybranych kart.
+6. **Automatyzacja, SMTP i Raporty** – w zakładce **SMTP** dodaj serwer pocztowy, w **Automatyzacji** skonfiguruj profil CRON, a w zakładce **Raporty** zaznacz wybrane pobrania, aby pobrać gotowy plik **`raport_przetargi_RRRR-MM-DD_GG-MM.xlsx`** lub wysłać go na wybrane adresy e-mail.
