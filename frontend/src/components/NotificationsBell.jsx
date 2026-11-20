@@ -13,29 +13,44 @@ export default function NotificationsBell() {
   const [notifications, setNotifications] = useState([]);
   const [open, setOpen] = useState(false);
   const [expandedId, setExpandedId] = useState(null);
+  // ID powiadomień, które były nowe w momencie otwarcia panelu (żeby w liście nadal miały niebieską kropkę)
+  const [freshUnreadIds, setFreshUnreadIds] = useState(() => new Set());
   const wrapperRef = useRef(null);
 
   const fetchNotifications = async () => {
     try {
       const res = await api.get('/automation/notifications');
-      setNotifications(res.data || []);
+      const data = res.data || [];
+      setNotifications(data);
+      return data;
     } catch {
-      // Ciche pominięcie błędu przy odpytywaniu w tle
+      return null;
     }
   };
 
   useEffect(() => {
     fetchNotifications();
-    const interval = setInterval(fetchNotifications, 10000);
-    return () => clearInterval(interval);
+    const interval = setInterval(fetchNotifications, 5000);
+    const handleImmediateRefresh = () => {
+      fetchNotifications();
+    };
+    window.addEventListener('notificationsUpdated', handleImmediateRefresh);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('notificationsUpdated', handleImmediateRefresh);
+    };
   }, []);
 
   const unreadCount = notifications.filter((n) => !n.isRead).length;
+  const showRedDot = !open && unreadCount > 0;
 
-  // Zamknięcie panelu oznacza obejrzane powiadomienia jako przeczytane (znika niebieska kropka)
-  const closePanelAndMarkSeen = async () => {
+  const closePanel = async () => {
     setOpen(false);
     setExpandedId(null);
+    setFreshUnreadIds(new Set());
+
+    // Jeśli podczas otwartego panelu wpadło jeszcze nowsze powiadomienie — oznacz je jako przeczytane
     if (notifications.some((n) => !n.isRead)) {
       setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
       try {
@@ -49,24 +64,48 @@ export default function NotificationsBell() {
   useEffect(() => {
     const handleClickOutside = (e) => {
       if (open && wrapperRef.current && !wrapperRef.current.contains(e.target)) {
-        closePanelAndMarkSeen();
+        closePanel();
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [open, notifications]);
 
-  const handleToggleBell = () => {
+  const handleToggleBell = async () => {
     if (open) {
-      closePanelAndMarkSeen();
-    } else {
-      fetchNotifications();
-      setOpen(true);
+      closePanel();
+      return;
+    }
+
+    // Natychmiast otwieramy panel (czerwona kropka znika od razu po kliknięciu)
+    setOpen(true);
+
+    const latest = (await fetchNotifications()) || notifications;
+    const unreadIds = latest.filter((n) => !n.isRead).map((n) => n.id);
+
+    if (unreadIds.length > 0) {
+      // Zachowujemy niebieską kropkę wewnątrz otwartej listy, ale w bazie już oznaczamy jako odebrane
+      setFreshUnreadIds(new Set(unreadIds));
+      setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
+      try {
+        await api.patch('/automation/notifications/read-all');
+      } catch {
+        // Ignoruj
+      }
     }
   };
 
   const handleClickNotification = async (notif) => {
     setExpandedId((prev) => (prev === notif.id ? null : notif.id));
+
+    if (freshUnreadIds.has(notif.id)) {
+      setFreshUnreadIds((prev) => {
+        const next = new Set(prev);
+        next.delete(notif.id);
+        return next;
+      });
+    }
+
     if (!notif.isRead) {
       setNotifications((prev) =>
         prev.map((n) => (n.id === notif.id ? { ...n, isRead: true } : n))
@@ -82,6 +121,11 @@ export default function NotificationsBell() {
   const handleDeleteNotification = async (e, id) => {
     e.stopPropagation();
     setNotifications((prev) => prev.filter((n) => n.id !== id));
+    setFreshUnreadIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
     if (expandedId === id) setExpandedId(null);
     try {
       await api.delete(`/automation/notifications/${id}`);
@@ -104,11 +148,14 @@ export default function NotificationsBell() {
         }`}
       >
         <Bell size={15} />
-        {unreadCount > 0 && (
+        {showRedDot && (
           <span
             title={`Nowe powiadomienia: ${unreadCount}`}
-            className="absolute -top-0.5 -right-0.5 w-3 h-3 rounded-full bg-blue-600 ring-2 ring-white"
-          />
+            className="absolute -top-0.5 -right-0.5 flex h-3 w-3"
+          >
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75" />
+            <span className="relative inline-flex rounded-full h-3 w-3 bg-red-600 ring-2 ring-white" />
+          </span>
         )}
       </button>
 
@@ -124,7 +171,7 @@ export default function NotificationsBell() {
             </div>
             <button
               type="button"
-              onClick={closePanelAndMarkSeen}
+              onClick={closePanel}
               className="p-1 rounded hover:bg-white/20 cursor-pointer"
               title="Zamknij"
             >
@@ -140,19 +187,19 @@ export default function NotificationsBell() {
             ) : (
               notifications.map((n) => {
                 const isExpanded = expandedId === n.id;
+                const isNewInList = !n.isRead || freshUnreadIds.has(n.id);
 
                 return (
                   <div
                     key={n.id}
                     onClick={() => handleClickNotification(n)}
                     className={`p-3.5 transition cursor-pointer ${
-                      !n.isRead
+                      isNewInList
                         ? 'bg-blue-50/70 hover:bg-blue-100/70'
                         : 'bg-white hover:bg-slate-50'
                     }`}
                   >
                     <div className="flex items-start gap-2.5">
-                      {/* Status sukces / błąd */}
                       {n.success ? (
                         <CheckCircle2
                           size={18}
@@ -167,8 +214,7 @@ export default function NotificationsBell() {
 
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-1.5">
-                          {/* Niebieska kropeczka dla nowego (pierwszy raz widzianego) powiadomienia */}
-                          {!n.isRead && (
+                          {isNewInList && (
                             <span
                               title="Nowe powiadomienie"
                               className="w-2.5 h-2.5 rounded-full bg-blue-600 shrink-0"
@@ -202,7 +248,6 @@ export default function NotificationsBell() {
                         </div>
                       </div>
 
-                      {/* Mały "x" do usunięcia powiadomienia */}
                       <button
                         type="button"
                         onClick={(e) => handleDeleteNotification(e, n.id)}
@@ -213,7 +258,6 @@ export default function NotificationsBell() {
                       </button>
                     </div>
 
-                    {/* Rozwijane szczegóły powiadomienia (przyczyna błędu / logi) */}
                     {isExpanded && n.details && (
                       <div
                         onClick={(e) => e.stopPropagation()}
