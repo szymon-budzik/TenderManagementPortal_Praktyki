@@ -20,7 +20,7 @@ Zintegrowana platforma webowa do automatycznego monitorowania ogłoszeń przetar
   * Grupowanie wykrytych aktualizacji bezpośrednio nad bazowym ogłoszeniem, dedykowane sprawdzanie zmian wyłącznie dla obserwowanych przetargów oraz **wizualne porównanie wersji (Diff „Przed / Po”)**.
   * Możliwość zaznaczenia dowolnych oryginałów i aktualizacji w celu utworzenia gotowego raportu w zakładce **Raporty**.
 * **Automatyzacja, Powiadomienia i Raporty Excel:**
-  * Wieloprofilowy harmonogram **CRON** (wybrane dni/godziny lub interwały minutowe), obsługa wielu kont **SMTP** oraz dzwoneczek powiadomień o wynikach automatycznych uruchomień.
+  * Wieloprofilowy harmonogram **CRON** (wybrane dni/godziny lub interwały minutowe), obsługa wielu kont **SMTP** (bez zwracania haseł w odpowiedziach `GET` — eksponowana jest jedynie flaga `hasPassword`) oraz dzwoneczek powiadomień o wynikach automatycznych uruchomień.
   * Eksport wybranych pobrań i raportów z Obserwowanych do datowanego pliku `.xlsx` (klikalne hiperłącza, źródło endpointa, oczyszczone szczegóły, autofiltr i zamrożony nagłówek) oraz ręczna lub automatyczna wysyłka e-mail.
 * **Zarządzanie rolami i Backup JSON:**
   * Autoryzacja JWT i kontrola dostępu oparta na rolach (RBAC).
@@ -28,7 +28,7 @@ Zintegrowana platforma webowa do automatycznego monitorowania ogłoszeń przetar
 
 ---
 
-## 2. Architektura Systemu
+## 2. Architektura i Struktura Projektu
 
 System składa się z 4 współpracujących kontenerów uruchamianych przez **Docker Compose**:
 
@@ -37,11 +37,41 @@ System składa się z 4 współpracujących kontenerów uruchamianych przez **Do
 * **`ingestion-worker`** (`port 8000`) – mikroserwis Python (FastAPI + BeautifulSoup4 + Pandas + OpenPyXL) realizujący Web Scraping HTML, generowanie arkuszy `.xlsx` oraz wysyłkę SMTP.
 * **`postgres`** (`port 5432`) – relacyjna baza danych PostgreSQL 16 przechowująca przetargi, historię ich aktualizacji (`tender_updates`), kategorie słów kluczowych, endpointy, konta SMTP, profile automatyzacji, powiadomienia, historię pobrań oraz użytkowników.
 
+### Struktura repozytorium
+
+```text
+przetargi-app/
+├── docker-compose.yml
+├── backend/java-backend/
+│   └── src/
+│       ├── main/java/com/przetargi/java_backend/
+│       │   ├── config/          # Konfiguracja Spring Security, JWT, obsługa błędów, DataInitializer
+│       │   ├── controller/      # Cienkie kontrolery REST (mapowanie HTTP i walidacja, pełna warstwa DTO)
+│       │   ├── dto/             # Rekordy i klasy DTO żądań/odpowiedzi
+│       │   ├── entity/          # Encje JPA i enumy domenowe
+│       │   ├── repository/      # Repozytoria Spring Data JPA i specyfikacje
+│       │   └── service/         # Wyspecjalizowane serwisy domenowe (scoring, daty, źródła, aktualizacje, raporty, SMTP, harmonogram, backup)
+│       ├── main/resources/db/migration/  # Migracje Flyway V1–V14
+│       └── test/java/com/przetargi/java_backend/service/  # Testy jednostkowe JUnit 5 / Mockito
+├── frontend/src/
+│   ├── api.js                   # Klient Axios z interceptorami JWT
+│   ├── services/                # Moduły zapytań HTTP (endpoints, tenders, automation, keywords, users)
+│   ├── hooks/                   # Custom hooki (useSort, usePagination, usePolling, useConfirmDialog)
+│   └── components/              # Widoki oraz modułowe podkomponenty w podfolderach (endpoints/, observed/, automation/, keywords/, tenders/, analytics/, users/, reports/)
+└── ingestion-worker/
+    ├── main.py                  # Punkt wejścia FastAPI (/scrape, /excel/export, /excel/email)
+    ├── models.py                # Schematy Pydantic
+    ├── scraper.py               # Pobieranie HTML i parsowanie BS4 / Pandas
+    ├── excel_export.py          # Generowanie i stylowanie arkuszy .xlsx (OpenPyXL)
+    ├── email_sender.py          # Wysyłka załączników Excel przez SMTP
+    └── Dockerfile
+```
+
 ---
 
 ## 3. Zmienne Środowiskowe
 
-Konfiguracja środowiskowa przekazywana jest w pliku `docker-compose.yml` oraz `application.properties`:
+Konfiguracja środowiskowa przekazywana jest w pliku `docker-compose.yml` oraz `backend/java-backend/src/main/resources/application.properties`:
 
 ### Kontener Bazy Danych (`postgres`)
 | Zmienna | Wartość domyślna | Opis |
@@ -57,8 +87,9 @@ Konfiguracja środowiskowa przekazywana jest w pliku `docker-compose.yml` oraz `
 | `SPRING_DATASOURCE_USERNAME` | `tender_user` | Login do bazy danych |
 | `SPRING_DATASOURCE_PASSWORD` | `secretpassword` | Hasło do bazy danych |
 | `SCRAPER_SERVICE_URL` | `http://ingestion-worker:8000` | Wewnętrzny adres URL mikroserwisu Python (Scraper & Excel Worker) |
-| `APP_JWT_SECRET` | *(klucz z `application.properties`)* | Klucz tajny HMAC-SHA256 służący do podpisywania tokenów JWT |
+| `JWT_SECRET` | *(wartość domyślna w `application.properties`)* | Klucz tajny HMAC-SHA256 (min. 32 znaki) służący do podpisywania tokenów JWT |
 | `APP_JWT_EXPIRATION_MS` | `86400000` *(24h)* | Czas ważności tokenu autoryzacyjnego JWT w milisekundach |
+| `INTERNAL_API_KEY` | *(wartość domyślna w `application.properties`)* | Klucz autoryzacji dla wewnętrznych endpointów `/api/internal/**` |
 
 ---
 
@@ -99,11 +130,35 @@ docker compose ps
 1. Otwórz **`http://localhost:5173`** i zaloguj się na konto **`admin`** / **`admin123`**.
 2. **Endpointy** – dodaj źródło danych (lub zaimportuj gotową konfigurację przez przycisk **Backup JSON** w panelu roli), np.:
    * **Nazwa:** `e-Zamówienia BZP`
-   * **URL:** `[https://ezamowienia.gov.pl/mo-board/api/v1/notice?NoticeType=ContractNotice&PublicationDateFrom=](https://ezamowienia.gov.pl/mo-board/api/v1/notice?NoticeType=ContractNotice&PublicationDateFrom=){TODAY-1D_START}&PublicationDateTo={TODAY_END}&PageSize=50`
+   * **URL:** `https://ezamowienia.gov.pl/mo-board/api/v1/notice?NoticeType=ContractNotice&PublicationDateFrom={TODAY-1D_START}&PublicationDateTo={TODAY_END}&PageSize=50`
    * **Tryb:** `API GET`
-   * **Szablon linku:** `[https://ezamowienia.gov.pl/mo-client-board/bzp/notice-details/id/](https://ezamowienia.gov.pl/mo-client-board/bzp/notice-details/id/){objectId}`
+   * **Szablon linku:** `https://ezamowienia.gov.pl/mo-client-board/bzp/notice-details/id/{objectId}`
    * Kliknij **Testuj** (żarówka), aby zweryfikować połączenie i podejrzeć wywołany adres po podstawieniu zmiennych daty.
 3. **Keywordsy** – utwórz kategorię (np. `IT`) ze słowami kluczowymi (np. `oprogramowanie*, serwer*, chmur*, szkolenie`). Kliknij na poszczególne słowa, aby ustawić wagę (`1–100 pkt`), wildcard (`*`) lub oznaczyć wykluczenie.
 4. **Wyszukiwarka** – zaznacz wybrane endpointy i kategorie, ustaw tryb dopasowania (`OR`/`AND`) i uruchom pobieranie. System zapisze wyłącznie ogłoszenia z wynikiem `> 0 pkt`.
 5. **Przetargi i Obserwowane** – otwórz dowolny przetarg, aby zobaczyć podświetlone słowa kluczowe i klikalny link. Zmień status z `NEW` na `INTERESTED`, przejdź do zakładki **Obserwowane** i przetestuj licznik godzin do terminu, przycisk **Sprawdź aktualizacje**, porównanie wersji (**Diff**) oraz tworzenie raportu z wybranych kart.
 6. **Automatyzacja, SMTP i Raporty** – w zakładce **SMTP** dodaj serwer pocztowy, w **Automatyzacji** skonfiguruj profil CRON, a w zakładce **Raporty** zaznacz wybrane pobrania, aby pobrać gotowy plik **`raport_przetargi_RRRR-MM-DD_GG-MM.xlsx`** lub wysłać go na wybrane adresy e-mail.
+
+---
+
+## 6. Testy Jednostkowe i Lokalny Build
+
+### Backend (Java 21 / Maven)
+```bash
+cd backend/java-backend
+./mvnw compile
+./mvnw test "-Dtest=*ServiceTest"
+```
+*(Na Windows PowerShell użyj `.\mvnw.cmd` zamiast `./mvnw`).*
+
+### Frontend (React / Vite)
+```bash
+cd frontend
+npm install
+npm run build
+```
+
+### Worker Python (`ingestion-worker`)
+```bash
+python -m py_compile ingestion-worker/main.py ingestion-worker/models.py ingestion-worker/scraper.py ingestion-worker/excel_export.py ingestion-worker/email_sender.py
+```
