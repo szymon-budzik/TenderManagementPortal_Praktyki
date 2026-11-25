@@ -48,7 +48,7 @@ export default function SmtpView() {
       smtpHost: acc.smtpHost || acc.host || '',
       smtpPort: acc.smtpPort ?? acc.port ?? 587,
       smtpUsername: acc.smtpUsername || acc.username || '',
-      smtpPassword: acc.smtpPassword || acc.password || '',
+      smtpPassword: '',
     });
   };
 
@@ -64,9 +64,11 @@ export default function SmtpView() {
       port: Number(smtpForm.smtpPort) || 587,
       smtpUsername: smtpForm.smtpUsername.trim(),
       username: smtpForm.smtpUsername.trim(),
-      smtpPassword: smtpForm.smtpPassword,
-      password: smtpForm.smtpPassword,
     };
+    if (!editingSmtpId || smtpForm.smtpPassword.trim() !== '') {
+      payload.smtpPassword = smtpForm.smtpPassword;
+      payload.password = smtpForm.smtpPassword;
+    }
 
     try {
       if (editingSmtpId) {
@@ -197,10 +199,10 @@ export default function SmtpView() {
           <label className="block text-xs font-bold uppercase mb-1">Hasło aplikacji</label>
           <input
             type="password"
-            required
+            required={!editingSmtpId}
             value={smtpForm.smtpPassword}
             onChange={(e) => setSmtpForm({ ...smtpForm, smtpPassword: e.target.value })}
-            placeholder="16-znakowy kod"
+            placeholder={editingSmtpId ? 'Pozostaw puste, aby nie zmieniać' : '16-znakowy kod'}
             className="w-full px-3 py-2 border border-blue-300 rounded-lg bg-white text-sm text-black"
           />
         </div>

@@ -1,80 +1,27 @@
-import { useState, useEffect, useMemo } from 'react';
-import api from '../api';
+import { useState, useEffect, useCallback } from 'react';
+import { KeyRound } from 'lucide-react';
 import ConfirmModal from './ConfirmModal';
+import KeywordCategoryForm from './keywords/KeywordCategoryForm';
+import KeywordConfigPanel from './keywords/KeywordConfigPanel';
+import KeywordCategoriesTable from './keywords/KeywordCategoriesTable';
 import {
-  Trash2,
-  Plus,
-  Pencil,
-  Check,
-  X,
-  KeyRound,
-  ArrowUpDown,
-  Settings,
-} from 'lucide-react';
+  hasWildcardSuffix,
+  parseKeywordsString,
+  serializeKeywordsList,
+} from './keywords/keywordUtils';
+import {
+  createKeywordCategory,
+  deleteKeywordCategory,
+  getKeywordCategories,
+  updateKeywordCategory,
+} from '../services/keywordsApi';
+import { useSort } from '../hooks/useSort';
+import { useConfirmDialog } from '../hooks/useConfirmDialog';
 
-function hasWildcardSuffix(word) {
-  if (!word) return false;
-  const trimmed = word.trim();
-  return trimmed.length > 1 && trimmed.endsWith('*');
-}
-
-export function parseKeywordsString(raw) {
-  if (!raw) return [];
-  return raw
-    .split(',')
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .map((item) => {
-      let current = item;
-      let isWildcard = false;
-
-      if (current.toUpperCase().endsWith(':WILDCARD')) {
-        isWildcard = true;
-        current = current.substring(0, current.length - ':WILDCARD'.length).trim();
-      }
-
-      const idx = current.lastIndexOf(':');
-      if (idx > 0) {
-        const word = current.substring(0, idx).trim();
-        const val = current.substring(idx + 1).trim().toUpperCase();
-        const validWildcard = isWildcard && hasWildcardSuffix(word);
-        if (val === 'EXCLUDED') {
-          return { word, score: 50, isExcluded: true, isWildcard: validWildcard };
-        }
-        const parsedScore = parseInt(val, 10);
-        return {
-          word,
-          score: Number.isNaN(parsedScore) ? 50 : Math.max(1, Math.min(100, parsedScore)),
-          isExcluded: false,
-          isWildcard: validWildcard,
-        };
-      }
-      return {
-        word: current,
-        score: 50,
-        isExcluded: false,
-        isWildcard: isWildcard && hasWildcardSuffix(current),
-      };
-    });
-}
-
-export function serializeKeywordsList(list) {
-  return list
-    .map((k) => {
-      const cleanWord = k.word.trim();
-      const validWildcard = Boolean(k.isWildcard && hasWildcardSuffix(cleanWord));
-      return `${cleanWord}:${k.isExcluded ? 'EXCLUDED' : k.score}${
-        validWildcard ? ':WILDCARD' : ''
-      }`;
-    })
-    .join(', ');
-}
+export { parseKeywordsString, serializeKeywordsList };
 
 export default function KeywordsView() {
   const [categories, setCategories] = useState([]);
-  const [sortConfig, setSortConfig] = useState({ key: 'name', dir: 'asc' });
-  const [confirmDialog, setConfirmDialog] = useState(null);
-
   const [name, setName] = useState('');
   const [keywordsInput, setKeywordsInput] = useState('');
 
@@ -86,18 +33,24 @@ export default function KeywordsView() {
   const [selectedKeyword, setSelectedKeyword] = useState(null);
   const [openBulkMenuCatId, setOpenBulkMenuCatId] = useState(null);
 
-  const fetchCategories = async () => {
+  const { confirmDialog, openConfirm, closeConfirm } = useConfirmDialog();
+  const { toggleSort, sortedItems: sortedCategories } = useSort(categories, {
+    key: 'name',
+    dir: 'asc',
+  });
+
+  const fetchCategories = useCallback(async () => {
     try {
-      const res = await api.get('/keywords');
-      setCategories(res.data || []);
+      const data = await getKeywordCategories();
+      setCategories(data);
     } catch (err) {
       console.error('Błąd pobierania kategorii słów kluczowych:', err);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchCategories();
-  }, []);
+  }, [fetchCategories]);
 
   useEffect(() => {
     const handleClickOutside = (e) => {
@@ -108,23 +61,6 @@ export default function KeywordsView() {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [openBulkMenuCatId]);
-
-  const toggleSort = (key) => {
-    setSortConfig((prev) => ({
-      key,
-      dir: prev.key === key && prev.dir === 'asc' ? 'desc' : 'asc',
-    }));
-  };
-
-  const sortedCategories = useMemo(() => {
-    const copy = [...categories];
-    copy.sort((a, b) => {
-      const { key, dir } = sortConfig;
-      const mult = dir === 'asc' ? 1 : -1;
-      return String(a[key] ?? '').localeCompare(String(b[key] ?? ''), 'pl') * mult;
-    });
-    return copy;
-  }, [categories, sortConfig]);
 
   const handleCreateCategory = async (e) => {
     e.preventDefault();
@@ -138,7 +74,7 @@ export default function KeywordsView() {
       .join(', ');
 
     try {
-      await api.post('/keywords', {
+      await createKeywordCategory({
         name: name.trim(),
         keywords: words,
         score: 50,
@@ -179,13 +115,8 @@ export default function KeywordsView() {
   const handleToggleWildcard = (checked) => {
     setSelectedKeyword((prev) => {
       if (!prev) return prev;
-      if (checked && !hasWildcardSuffix(prev.word)) {
-        return prev;
-      }
-      return {
-        ...prev,
-        isWildcard: checked,
-      };
+      if (checked && !hasWildcardSuffix(prev.word)) return prev;
+      return { ...prev, isWildcard: checked };
     });
   };
 
@@ -208,7 +139,7 @@ export default function KeywordsView() {
     };
 
     try {
-      await api.put(`/keywords/${cat.id}`, {
+      await updateKeywordCategory(cat.id, {
         name: cat.name,
         keywords: serializeKeywordsList(list),
         score: 50,
@@ -221,7 +152,6 @@ export default function KeywordsView() {
     }
   };
 
-  // Zbiorcze ustawienie trybu: 'NEUTRAL' | 'EXCLUDED' | 'WILDCARD' | 'EXCLUDED_WILDCARD'
   const handleBulkUpdateCategoryKeywords = async (cat, mode) => {
     const list = parseKeywordsString(cat.keywords);
     if (list.length === 0) {
@@ -231,49 +161,25 @@ export default function KeywordsView() {
 
     const updatedList = list.map((kw) => {
       const canBeWildcard = hasWildcardSuffix(kw.word);
-      if (mode === 'NEUTRAL') {
-        return {
-          ...kw,
-          isExcluded: false,
-          isWildcard: false,
-        };
-      }
-      if (mode === 'EXCLUDED') {
-        return {
-          ...kw,
-          isExcluded: true,
-          isWildcard: false,
-        };
-      }
+      if (mode === 'NEUTRAL') return { ...kw, isExcluded: false, isWildcard: false };
+      if (mode === 'EXCLUDED') return { ...kw, isExcluded: true, isWildcard: false };
       if (mode === 'WILDCARD') {
-        // Tylko słowa z gwiazdką na końcu mogą dostać wildcard
         if (!canBeWildcard) return kw;
-        return {
-          ...kw,
-          isExcluded: false,
-          isWildcard: true,
-        };
+        return { ...kw, isExcluded: false, isWildcard: true };
       }
-      // mode === 'EXCLUDED_WILDCARD'
       if (!canBeWildcard) return kw;
-      return {
-        ...kw,
-        isExcluded: true,
-        isWildcard: true,
-      };
+      return { ...kw, isExcluded: true, isWildcard: true };
     });
 
     try {
-      await api.put(`/keywords/${cat.id}`, {
+      await updateKeywordCategory(cat.id, {
         name: cat.name,
         keywords: serializeKeywordsList(updatedList),
         score: 50,
         isExcluded: false,
       });
       setOpenBulkMenuCatId(null);
-      if (selectedKeyword?.catId === cat.id) {
-        setSelectedKeyword(null);
-      }
+      if (selectedKeyword?.catId === cat.id) setSelectedKeyword(null);
       fetchCategories();
     } catch (err) {
       console.error('Błąd zbiorczej aktualizacji słów kluczowych:', err);
@@ -288,23 +194,19 @@ export default function KeywordsView() {
     const list = parseKeywordsString(cat.keywords);
     if (list.length <= 1) return;
 
-    setConfirmDialog({
+    openConfirm({
       title: 'Usuń słowo kluczowe',
       message: `Czy na pewno chcesz usunąć słowo "${selectedKeyword.word}" z kategorii "${cat.name}"?`,
       onConfirm: async () => {
-        try {
-          const nextList = list.filter((_, idx) => idx !== selectedKeyword.wordIndex);
-          await api.put(`/keywords/${cat.id}`, {
-            name: cat.name,
-            keywords: serializeKeywordsList(nextList),
-            score: 50,
-            isExcluded: false,
-          });
-          setSelectedKeyword(null);
-          fetchCategories();
-        } finally {
-          setConfirmDialog(null);
-        }
+        const nextList = list.filter((_, idx) => idx !== selectedKeyword.wordIndex);
+        await updateKeywordCategory(cat.id, {
+          name: cat.name,
+          keywords: serializeKeywordsList(nextList),
+          score: 50,
+          isExcluded: false,
+        });
+        setSelectedKeyword(null);
+        fetchCategories();
       },
     });
   };
@@ -318,11 +220,10 @@ export default function KeywordsView() {
       .filter(Boolean)
       .map((w) => ({ word: w, score: 50, isExcluded: false, isWildcard: false }));
 
-    const combined = [...existing, ...added];
     try {
-      await api.put(`/keywords/${cat.id}`, {
+      await updateKeywordCategory(cat.id, {
         name: cat.name,
-        keywords: serializeKeywordsList(combined),
+        keywords: serializeKeywordsList([...existing, ...added]),
         score: 50,
         isExcluded: false,
       });
@@ -337,7 +238,7 @@ export default function KeywordsView() {
   const handleSaveCategoryName = async (cat) => {
     if (!editCatName.trim()) return;
     try {
-      await api.put(`/keywords/${cat.id}`, {
+      await updateKeywordCategory(cat.id, {
         name: editCatName.trim(),
         keywords: cat.keywords,
         score: 50,
@@ -351,30 +252,16 @@ export default function KeywordsView() {
   };
 
   const confirmDeleteCategory = (cat) => {
-    setConfirmDialog({
+    openConfirm({
       title: 'Usuń kategorię słów kluczowych',
       message: `Czy na pewno chcesz usunąć kategorię "${cat.name}" wraz ze wszystkimi jej słowami?`,
       onConfirm: async () => {
-        try {
-          await api.delete(`/keywords/${cat.id}`);
-          if (selectedKeyword?.catId === cat.id) setSelectedKeyword(null);
-          fetchCategories();
-        } finally {
-          setConfirmDialog(null);
-        }
+        await deleteKeywordCategory(cat.id);
+        if (selectedKeyword?.catId === cat.id) setSelectedKeyword(null);
+        fetchCategories();
       },
     });
   };
-
-  const previewWords = keywordsInput
-    .split(',')
-    .map((w) => w.trim())
-    .filter(Boolean);
-
-  const selectedCanBeWildcard = selectedKeyword ? hasWildcardSuffix(selectedKeyword.word) : false;
-  const selectedIsExcludedWildcard = Boolean(
-    selectedKeyword?.isExcluded && selectedKeyword?.isWildcard && selectedCanBeWildcard
-  );
 
   return (
     <div className="space-y-6 text-black">
@@ -386,8 +273,8 @@ export default function KeywordsView() {
           message={confirmDialog.message}
           description={confirmDialog.message}
           onConfirm={confirmDialog.onConfirm}
-          onCancel={() => setConfirmDialog(null)}
-          onClose={() => setConfirmDialog(null)}
+          onCancel={closeConfirm}
+          onClose={closeConfirm}
         />
       )}
 
@@ -401,533 +288,57 @@ export default function KeywordsView() {
         </div>
       </div>
 
-      <form
+      <KeywordCategoryForm
+        name={name}
+        onNameChange={setName}
+        keywordsInput={keywordsInput}
+        onKeywordsInputChange={setKeywordsInput}
         onSubmit={handleCreateCategory}
-        className="bg-white p-6 rounded-xl border border-blue-200 space-y-4 shadow-xs"
-      >
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-start">
-          <div className="md:col-span-4">
-            <label className="block text-xs font-bold uppercase mb-1">Nazwa kategorii</label>
-            <input
-              type="text"
-              required
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="np. IT, Frontend, Logistyka"
-              className="w-full px-3.5 py-2.5 border border-blue-300 rounded-lg text-black font-semibold focus:outline-none focus:border-blue-600"
-            />
-          </div>
+      />
 
-          <div className="md:col-span-6">
-            <label className="block text-xs font-bold uppercase mb-1">
-              Słowa kluczowe (rozdzielone przecinkami)
-            </label>
-            <input
-              type="text"
-              required
-              value={keywordsInput}
-              onChange={(e) => setKeywordsInput(e.target.value)}
-              placeholder="np. oprogramowanie, dostaw*, python"
-              className="w-full px-3.5 py-2.5 border border-blue-300 rounded-lg text-black font-mono text-sm focus:outline-none focus:border-blue-600"
-            />
-            {previewWords.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 mt-2">
-                {previewWords.map((w, idx) => (
-                  <span
-                    key={idx}
-                    className="px-2.5 py-0.5 bg-slate-200 border border-slate-400 rounded text-xs font-bold text-black"
-                  >
-                    {w}: 50
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
+      <KeywordConfigPanel
+        selectedKeyword={selectedKeyword}
+        onWordChange={handleSelectedWordChange}
+        onScoreChange={(score) => setSelectedKeyword((prev) => ({ ...prev, score }))}
+        onToggleWildcard={handleToggleWildcard}
+        onToggleExcluded={(isExcluded) =>
+          setSelectedKeyword((prev) => ({ ...prev, isExcluded }))
+        }
+        onSave={handleSaveSelectedKeyword}
+        onDelete={confirmRemoveSingleKeyword}
+        onClose={() => setSelectedKeyword(null)}
+      />
 
-          <div className="md:col-span-2 md:pt-5">
-            <button
-              type="submit"
-              className="w-full flex items-center justify-center gap-1.5 py-2.5 px-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg cursor-pointer"
-            >
-              <Plus size={16} /> Dodaj Kategorię
-            </button>
-          </div>
-        </div>
-      </form>
-
-      {/* Panel konfiguracji klikniętego słowa kluczowego */}
-      {selectedKeyword && (
-        <div className="bg-white p-6 rounded-xl border-2 border-blue-600 shadow-md space-y-4">
-          <div className="flex items-center justify-between border-b border-blue-100 pb-3">
-            <div className="flex flex-wrap items-center gap-2.5">
-              <div>
-                <span className="text-xs font-extrabold uppercase text-blue-700">
-                  Kategoria: {selectedKeyword.catName}
-                </span>
-                <h3 className="text-lg font-extrabold text-black">
-                  Konfiguracja słowa kluczowego:{' '}
-                  <span className="underline">{selectedKeyword.word}</span>
-                </h3>
-              </div>
-
-              {/* Podgląd na żywo jak będzie wyglądał tag po zapisie */}
-              <span
-                className={`px-3 py-1 rounded-lg text-xs font-extrabold border-2 ${
-                  selectedIsExcludedWildcard
-                    ? 'bg-rose-900 border-rose-950 text-white'
-                    : selectedKeyword.isExcluded
-                    ? 'bg-red-400 border-red-800 text-black'
-                    : selectedKeyword.isWildcard && selectedCanBeWildcard
-                    ? 'bg-purple-300 border-purple-800 text-black'
-                    : 'bg-white border-blue-400 text-black'
-                }`}
-              >
-                {selectedIsExcludedWildcard
-                  ? `${selectedKeyword.word.trim()} (WYKLUCZ*)`
-                  : selectedKeyword.isExcluded
-                  ? `${selectedKeyword.word.trim()} (WYKLUCZ)`
-                  : `${selectedKeyword.word.trim()}: ${selectedKeyword.score}`}
-              </span>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setSelectedKeyword(null)}
-              className="p-1.5 rounded-lg border border-blue-300 hover:bg-blue-50 cursor-pointer"
-            >
-              <X size={18} />
-            </button>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start bg-slate-50 p-4 rounded-xl border border-blue-200">
-            <div className="space-y-4">
-              <div>
-                <label className="block text-xs font-extrabold uppercase mb-1 text-black">
-                  Treść słowa kluczowego
-                </label>
-                <input
-                  type="text"
-                  value={selectedKeyword.word}
-                  onChange={(e) => handleSelectedWordChange(e.target.value)}
-                  placeholder="np. dostaw*"
-                  className="w-full px-3 py-2 border border-blue-300 rounded-lg bg-white text-black font-mono text-sm font-bold"
-                />
-                <p className="text-[11px] font-semibold text-slate-600 mt-1">
-                  Usunięcie gwiazdki <span className="font-mono font-bold">*</span> z końca automatycznie wyłącza tryb Wildcard.
-                </p>
-              </div>
-
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <label
-                    className={`text-xs font-extrabold uppercase ${
-                      selectedKeyword.isExcluded ? 'text-gray-400' : 'text-black'
-                    }`}
-                  >
-                    Waga słowa kluczowego (1–100 pkt)
-                  </label>
-                  <span
-                    className={`px-3 py-1 rounded-lg text-sm font-extrabold border ${
-                      selectedIsExcludedWildcard
-                        ? 'bg-rose-900 border-rose-950 text-white'
-                        : selectedKeyword.isExcluded
-                        ? 'bg-red-400 border-red-800 text-black'
-                        : selectedKeyword.isWildcard && selectedCanBeWildcard
-                        ? 'bg-purple-600 border-purple-900 text-white'
-                        : 'bg-blue-600 border-blue-800 text-white'
-                    }`}
-                  >
-                    {selectedIsExcludedWildcard
-                      ? 'WYKLUCZ*'
-                      : selectedKeyword.isExcluded
-                      ? 'WYKLUCZ'
-                      : `${selectedKeyword.score} pkt`}
-                  </span>
-                </div>
-
-                <input
-                  type="range"
-                  min="1"
-                  max="100"
-                  disabled={selectedKeyword.isExcluded}
-                  value={selectedKeyword.score}
-                  onChange={(e) =>
-                    setSelectedKeyword({ ...selectedKeyword, score: Number(e.target.value) })
-                  }
-                  className={`w-full h-2.5 rounded-lg appearance-none ${
-                    selectedKeyword.isExcluded
-                      ? 'bg-gray-300 accent-gray-400 opacity-45 cursor-not-allowed'
-                      : selectedKeyword.isWildcard
-                      ? 'bg-purple-200 accent-purple-600 cursor-pointer'
-                      : 'bg-blue-200 accent-blue-600 cursor-pointer'
-                  }`}
-                />
-                <div
-                  className={`flex justify-between text-xs font-bold ${
-                    selectedKeyword.isExcluded ? 'text-gray-400' : 'text-black'
-                  }`}
-                >
-                  <span>1 pkt</span>
-                  <span>50 pkt</span>
-                  <span>100 pkt</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex flex-col justify-between gap-3">
-              <label
-                className={`flex items-start gap-2.5 p-3 rounded-xl border-2 select-none transition ${
-                  selectedCanBeWildcard
-                    ? 'bg-purple-50 border-purple-500 cursor-pointer'
-                    : 'bg-slate-100 border-slate-300 opacity-60 cursor-not-allowed'
-                }`}
-              >
-                <input
-                  type="checkbox"
-                  disabled={!selectedCanBeWildcard}
-                  checked={selectedKeyword.isWildcard && selectedCanBeWildcard}
-                  onChange={(e) => handleToggleWildcard(e.target.checked)}
-                  className={`w-5 h-5 mt-0.5 accent-purple-700 shrink-0 ${
-                    selectedCanBeWildcard ? 'cursor-pointer' : 'cursor-not-allowed'
-                  }`}
-                />
-                <div>
-                  <div className="font-extrabold text-sm text-black">
-                    Odmiana końcówek (Wildcard *)
-                  </div>
-                  <div className="text-xs font-medium text-black/80 mt-0.5">
-                    {selectedCanBeWildcard ? (
-                      <>
-                        Dopasowuje dowolne końcówki rdzenia{' '}
-                        <span className="font-mono font-bold">{selectedKeyword.word.trim()}</span>.
-                        W połączeniu z wykluczeniem odrzuca wszystkie odmiany (kolor bordowy,{' '}
-                        <span className="font-bold">WYKLUCZ*</span>).
-                      </>
-                    ) : (
-                      <>
-                        Dostępne tylko dla słów kończących się na{' '}
-                        <span className="font-mono font-bold">*</span> (dopisz{' '}
-                        <span className="font-mono font-bold">*</span> na końcu treści słowa, np.{' '}
-                        <span className="font-mono font-bold">dostaw*</span>).
-                      </>
-                    )}
-                  </div>
-                </div>
-              </label>
-
-              <label
-                className={`flex items-start gap-2.5 p-3 rounded-xl border-2 cursor-pointer select-none transition ${
-                  selectedIsExcludedWildcard
-                    ? 'bg-rose-50 border-rose-900'
-                    : 'bg-white border-red-300'
-                }`}
-              >
-                <input
-                  type="checkbox"
-                  checked={selectedKeyword.isExcluded}
-                  onChange={(e) =>
-                    setSelectedKeyword({ ...selectedKeyword, isExcluded: e.target.checked })
-                  }
-                  className={`w-5 h-5 mt-0.5 cursor-pointer shrink-0 ${
-                    selectedIsExcludedWildcard ? 'accent-rose-900' : 'accent-red-600'
-                  }`}
-                />
-                <div>
-                  <div className="font-extrabold text-sm text-black">
-                    {selectedIsExcludedWildcard
-                      ? 'Wyklucz wszystkie odmiany (WYKLUCZ*)'
-                      : 'Wyklucz to słowo'}
-                  </div>
-                  <div className="text-xs font-medium text-black/80 mt-0.5">
-                    {selectedIsExcludedWildcard
-                      ? 'Kolor bordowy — odrzuca cały przetarg zawierający słowo z dowolną końcówką.'
-                      : 'Oznacza słowo na czerwono i odrzuca cały przetarg zawierający to słowo.'}
-                  </div>
-                </div>
-              </label>
-
-              <div className="flex items-center justify-end gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={confirmRemoveSingleKeyword}
-                  className="flex items-center gap-1 px-3.5 py-2 bg-white border border-red-400 hover:bg-red-50 text-black font-bold rounded-lg text-xs cursor-pointer"
-                >
-                  <Trash2 size={14} /> Usuń słowo
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSelectedKeyword(null)}
-                  className="px-3.5 py-2 bg-white border border-blue-300 hover:bg-blue-50 text-black font-bold rounded-lg text-xs cursor-pointer"
-                >
-                  Anuluj
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSaveSelectedKeyword}
-                  className="flex items-center gap-1 px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white font-extrabold rounded-lg text-xs cursor-pointer"
-                >
-                  <Check size={15} /> Zapisz słowo
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Tabela kategorii */}
-      <div className="bg-white rounded-xl border border-blue-200 overflow-visible shadow-xs">
-        <table className="w-full text-left border-collapse text-sm">
-          <thead>
-            <tr className="bg-blue-600 text-white select-none">
-              <th
-                onClick={() => toggleSort('name')}
-                className="p-3.5 font-bold w-64 cursor-pointer hover:bg-blue-700 rounded-tl-xl"
-              >
-                <div className="inline-flex items-center gap-1">
-                  Nazwa kategorii <ArrowUpDown size={14} />
-                </div>
-              </th>
-              <th
-                onClick={() => toggleSort('keywords')}
-                className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
-              >
-                <div className="inline-flex items-center gap-1">
-                  Słowa kluczowe (Kliknij w słowo, aby skonfigurować wagę, wildcard * lub wykluczenie){' '}
-                  <ArrowUpDown size={14} />
-                </div>
-              </th>
-              <th className="p-3.5 font-bold text-right w-56 rounded-tr-xl">Akcje</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-blue-100">
-            {sortedCategories.length === 0 ? (
-              <tr>
-                <td colSpan="3" className="p-6 text-center font-medium">
-                  Brak zdefiniowanych kategorii słów kluczowych.
-                </td>
-              </tr>
-            ) : (
-              sortedCategories.map((cat) => {
-                const parsedList = parseKeywordsString(cat.keywords);
-                const isEditingName = editingCatId === cat.id;
-                const isAddingWords = addingWordCatId === cat.id;
-                const isBulkMenuOpen = openBulkMenuCatId === cat.id;
-
-                return (
-                  <tr key={cat.id} className="hover:bg-blue-50/40">
-                    <td className="p-3.5 font-extrabold align-top">
-                      {isEditingName ? (
-                        <div className="flex items-center gap-1.5">
-                          <input
-                            type="text"
-                            value={editCatName}
-                            onChange={(e) => setEditCatName(e.target.value)}
-                            className="w-full px-2.5 py-1 border border-blue-400 rounded bg-white text-black font-bold"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => handleSaveCategoryName(cat)}
-                            className="p-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 cursor-pointer"
-                          >
-                            <Check size={14} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setEditingCatId(null)}
-                            className="p-1.5 bg-white border border-blue-300 rounded hover:bg-blue-50 cursor-pointer"
-                          >
-                            <X size={14} />
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="text-base text-black">{cat.name}</div>
-                      )}
-                    </td>
-
-                    <td className="p-3.5 align-top space-y-2">
-                      <div className="flex flex-wrap items-center gap-2">
-                        {parsedList.map((kw, idx) => {
-                          const isSelected =
-                            selectedKeyword?.catId === cat.id &&
-                            selectedKeyword?.wordIndex === idx;
-                          const isExcludedWildcard = kw.isExcluded && kw.isWildcard;
-
-                          let badgeStyle =
-                            'bg-white hover:bg-blue-50 border-blue-400 text-black';
-                          if (isExcludedWildcard) {
-                            badgeStyle = isSelected
-                              ? 'bg-rose-950 border-rose-950 text-white ring-2 ring-blue-500 ring-offset-1'
-                              : 'bg-rose-900 hover:bg-rose-950 border-rose-950 text-white';
-                          } else if (kw.isExcluded) {
-                            badgeStyle = isSelected
-                              ? 'bg-red-500 border-red-900 text-black ring-2 ring-blue-500 ring-offset-1'
-                              : 'bg-red-400 hover:bg-red-500 border-red-800 text-black';
-                          } else if (kw.isWildcard) {
-                            badgeStyle = isSelected
-                              ? 'bg-purple-600 border-purple-900 text-white'
-                              : 'bg-purple-300 hover:bg-purple-400 border-purple-800 text-black';
-                          } else if (isSelected) {
-                            badgeStyle = 'bg-blue-600 border-blue-900 text-white';
-                          }
-
-                          return (
-                            <button
-                              key={idx}
-                              type="button"
-                              onClick={() => handleSelectKeyword(cat, idx, kw)}
-                              title={
-                                isExcludedWildcard
-                                  ? 'Wykluczone + Odmiana końcówek (WYKLUCZ*)'
-                                  : kw.isExcluded
-                                  ? 'Słowo wykluczające'
-                                  : kw.isWildcard
-                                  ? 'Odmiana końcówek (Wildcard *) — dopasowuje różne końcówki'
-                                  : 'Kliknij, aby skonfigurować'
-                              }
-                              className={`px-3 py-1.5 rounded-lg text-xs font-extrabold border-2 transition transform active:scale-95 cursor-pointer ${badgeStyle}`}
-                            >
-                              {isExcludedWildcard
-                                ? `${kw.word} (WYKLUCZ*)`
-                                : kw.isExcluded
-                                ? `${kw.word} (WYKLUCZ)`
-                                : `${kw.word}: ${kw.score}`}
-                            </button>
-                          );
-                        })}
-
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setAddingWordCatId(isAddingWords ? null : cat.id);
-                            setNewWordsText('');
-                          }}
-                          className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-white border border-dashed border-blue-500 hover:bg-blue-50 text-black cursor-pointer"
-                        >
-                          + Dodaj słowo
-                        </button>
-                      </div>
-
-                      {isAddingWords && (
-                        <div className="flex items-center gap-2 pt-1 max-w-md">
-                          <input
-                            type="text"
-                            value={newWordsText}
-                            onChange={(e) => setNewWordsText(e.target.value)}
-                            placeholder="np. docker, dostaw*"
-                            className="flex-1 px-2.5 py-1 border border-blue-400 rounded bg-white text-black text-xs font-mono"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => handleAddWordsToCategory(cat)}
-                            className="px-3 py-1 bg-blue-600 text-white rounded text-xs font-bold cursor-pointer"
-                          >
-                            Dodaj
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setAddingWordCatId(null)}
-                            className="px-2.5 py-1 bg-white border border-blue-300 rounded text-xs font-bold cursor-pointer"
-                          >
-                            Anuluj
-                          </button>
-                        </div>
-                      )}
-                    </td>
-
-                    <td className="p-3.5 text-right whitespace-nowrap align-top">
-                      <div className="flex items-center justify-end gap-2">
-                        {/* Zębatka — zbiorcze ustawienie trybu */}
-                        <div className="relative" data-bulk-menu>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setOpenBulkMenuCatId(isBulkMenuOpen ? null : cat.id)
-                            }
-                            title="Zbiorczo ustaw tryb dla słów w tej kategorii"
-                            className={`p-1.5 rounded-lg border transition cursor-pointer ${
-                              isBulkMenuOpen
-                                ? 'bg-blue-600 border-blue-800 text-white'
-                                : 'bg-white border-blue-400 hover:bg-blue-50 text-black'
-                            }`}
-                          >
-                            <Settings size={15} />
-                          </button>
-
-                          {isBulkMenuOpen && (
-                            <div className="absolute right-0 top-full mt-1.5 w-56 bg-white rounded-xl border-2 border-blue-600 shadow-xl z-40 p-1.5 text-left space-y-1">
-                              <div className="px-2.5 py-1 text-[10px] font-extrabold uppercase text-blue-700 border-b border-blue-100">
-                                Ustaw słowa w kategorii jako:
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  handleBulkUpdateCategoryKeywords(cat, 'NEUTRAL')
-                                }
-                                className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs font-extrabold text-black hover:bg-blue-50 cursor-pointer"
-                              >
-                                <span className="w-3 h-3 rounded-full bg-white border-2 border-blue-500 shrink-0" />
-                                Neutralne (wszystkie)
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  handleBulkUpdateCategoryKeywords(cat, 'WILDCARD')
-                                }
-                                className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs font-extrabold text-black hover:bg-purple-50 cursor-pointer"
-                              >
-                                <span className="w-3 h-3 rounded-full bg-purple-300 border-2 border-purple-800 shrink-0" />
-                                Wildcards (tylko z *)
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  handleBulkUpdateCategoryKeywords(cat, 'EXCLUDED')
-                                }
-                                className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs font-extrabold text-black hover:bg-red-50 cursor-pointer"
-                              >
-                                <span className="w-3 h-3 rounded-full bg-red-400 border-2 border-red-800 shrink-0" />
-                                Wykluczone (wszystkie)
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  handleBulkUpdateCategoryKeywords(cat, 'EXCLUDED_WILDCARD')
-                                }
-                                className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs font-extrabold text-black hover:bg-rose-50 cursor-pointer"
-                              >
-                                <span className="w-3 h-3 rounded-full bg-rose-900 border-2 border-rose-950 shrink-0" />
-                                WYKLUCZ* (tylko z *)
-                              </button>
-                            </div>
-                          )}
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditingCatId(cat.id);
-                            setEditCatName(cat.name);
-                          }}
-                          className="flex items-center gap-1 px-3 py-1.5 bg-white border border-blue-400 hover:bg-blue-50 text-black rounded-lg font-bold text-xs cursor-pointer"
-                        >
-                          <Pencil size={14} /> Nazwa
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => confirmDeleteCategory(cat)}
-                          className="flex items-center gap-1 px-3 py-1.5 bg-white border border-blue-300 hover:bg-red-50 text-black rounded-lg font-bold text-xs cursor-pointer"
-                        >
-                          <Trash2 size={14} /> Usuń
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
+      <KeywordCategoriesTable
+        categories={sortedCategories}
+        selectedKeyword={selectedKeyword}
+        editingCatId={editingCatId}
+        editCatName={editCatName}
+        onEditCatNameChange={setEditCatName}
+        onStartEditName={(cat) => {
+          setEditingCatId(cat.id);
+          setEditCatName(cat.name);
+        }}
+        onSaveCategoryName={handleSaveCategoryName}
+        onCancelEditName={() => setEditingCatId(null)}
+        addingWordCatId={addingWordCatId}
+        newWordsText={newWordsText}
+        onNewWordsTextChange={setNewWordsText}
+        onToggleAddWords={(catId) => {
+          setAddingWordCatId((prev) => (prev === catId ? null : catId));
+          setNewWordsText('');
+        }}
+        onAddWordsToCategory={handleAddWordsToCategory}
+        onCancelAddWords={() => setAddingWordCatId(null)}
+        openBulkMenuCatId={openBulkMenuCatId}
+        onToggleBulkMenu={(catId) =>
+          setOpenBulkMenuCatId((prev) => (prev === catId ? null : catId))
+        }
+        onBulkUpdate={handleBulkUpdateCategoryKeywords}
+        onSelectKeyword={handleSelectKeyword}
+        onConfirmDeleteCategory={confirmDeleteCategory}
+        onToggleSort={toggleSort}
+      />
     </div>
   );
 }
