@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { Plus, Link2, Sparkles, Code2, Table2, X, HelpCircle } from 'lucide-react';
 import {
-  DATE_TOKENS,
   EMPTY_ENDPOINT,
   SCRAPER_PRESETS,
   describeCssSelector,
@@ -65,14 +64,6 @@ export default function EndpointCreateForm({ onCreate }) {
     setNewEndpoint((prev) => ({ ...prev, payload: next }));
   };
 
-  const handleInsertDateToken = (token) => {
-    setNewEndpoint((prev) =>
-      prev.httpMethod === 'POST'
-        ? { ...prev, payload: (prev.payload || '') + token }
-        : { ...prev, url: (prev.url || '') + token }
-    );
-  };
-
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (newEndpoint.httpMethod === 'POST') {
@@ -131,7 +122,7 @@ export default function EndpointCreateForm({ onCreate }) {
             value={newEndpoint.url}
             onChange={(e) => setNewEndpoint({ ...newEndpoint, url: e.target.value })}
             className="w-full px-3 py-2 border border-blue-300 rounded-lg text-black font-mono text-xs"
-            placeholder="https://... (możesz użyć np. {TODAY-1D_START})"
+            placeholder="https://..."
           />
         </div>
 
@@ -159,40 +150,19 @@ export default function EndpointCreateForm({ onCreate }) {
         </div>
       </div>
 
-      {/* Ściągawka dynamicznych zmiennych daty + Szablon linku */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-3">
-        <div className="lg:col-span-6 p-3 bg-blue-50/70 border border-blue-200 rounded-xl space-y-1.5">
-          <div className="text-[11px] font-extrabold uppercase text-blue-900">
-            Zmienne daty (kliknij, aby wstawić do {newEndpoint.httpMethod === 'POST' ? 'Payloadu' : 'URL'})
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {DATE_TOKENS.map((token) => (
-              <button
-                key={token}
-                type="button"
-                onClick={() => handleInsertDateToken(token)}
-                title="Kliknij, aby dopisać zmienną"
-                className="px-2 py-0.5 bg-white hover:bg-blue-100 border border-blue-400 rounded text-[11px] font-mono font-bold text-black cursor-pointer"
-              >
-                {token}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="lg:col-span-6 p-3 bg-emerald-50/70 border border-emerald-300 rounded-xl space-y-1">
-          <label className="flex items-center gap-1.5 text-[11px] font-extrabold uppercase text-emerald-950">
-            <Link2 size={13} />
-            Szablon linku do przetargu (opcjonalny — np. {'{objectId}'}, {'{tenderId}'}, {'{id}'})
-          </label>
-          <input
-            type="text"
-            value={newEndpoint.linkTemplate}
-            onChange={(e) => setNewEndpoint({ ...newEndpoint, linkTemplate: e.target.value })}
-            placeholder="np. https://ezamowienia.gov.pl/mo-client-board/bzp/notice-details/id/{objectId}"
-            className="w-full px-3 py-1.5 border border-emerald-400 rounded-lg bg-white text-black font-mono text-xs"
-          />
-        </div>
+      {/* Szablon linku */}
+      <div className="p-3 bg-emerald-50/70 border border-emerald-300 rounded-xl space-y-1">
+        <label className="flex items-center gap-1.5 text-[11px] font-extrabold uppercase text-emerald-950">
+          <Link2 size={13} />
+          Szablon linku do przetargu (opcjonalny — np. {'{objectId}'}, {'{tenderId}'}, {'{id}'})
+        </label>
+        <input
+          type="text"
+          value={newEndpoint.linkTemplate}
+          onChange={(e) => setNewEndpoint({ ...newEndpoint, linkTemplate: e.target.value })}
+          placeholder="np. https://ezamowienia.gov.pl/mo-client-board/bzp/notice-details/id/{objectId}"
+          className="w-full px-3 py-1.5 border border-emerald-400 rounded-lg bg-white text-black font-mono text-xs"
+        />
       </div>
 
       {newEndpoint.httpMethod === 'GET' && (

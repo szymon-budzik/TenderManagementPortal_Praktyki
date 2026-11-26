@@ -149,7 +149,7 @@ export default function EndpointsTable({
                             type="text"
                             value={editForm.url}
                             onChange={(e) => setEditForm({ ...editForm, url: e.target.value })}
-                            placeholder="URL (obsługuje zmienne daty, np. {TODAY-1D_START})"
+                            placeholder="URL endpointu"
                             className="w-full px-2.5 py-1.5 border border-blue-400 rounded bg-white text-black"
                           />
 

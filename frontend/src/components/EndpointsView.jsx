@@ -233,7 +233,7 @@ export default function EndpointsView() {
           Zarządzanie Źródłami Danych (API i Web Scraper)
         </h2>
         <p className="text-xs font-semibold text-black mt-0.5">
-          URL i Payload obsługują dynamiczne zmienne daty ({'{TODAY}'}, {'{TODAY-1D_START}'}), a opcjonalny Szablon linku ({'{objectId}'}, {'{id}'}) buduje klikalne adresy bez hardkodowania portali.
+          Zarządzaj źródłami API (GET/POST) i Web Scraperem. Opcjonalny Szablon linku ({'{objectId}'}, {'{id}'}) buduje klikalne adresy bez hardkodowania portali.
         </p>
       </div>
 

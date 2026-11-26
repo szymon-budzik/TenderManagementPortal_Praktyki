@@ -2,16 +2,6 @@ export const PAGE_SIZE = 10;
 
 export const SCRAPER_PRESETS = ['table tr', 'table td', 'table, td', 'article', '.tender, .notice'];
 
-export const DATE_TOKENS = [
-  '{TODAY}',
-  '{YESTERDAY}',
-  '{TODAY-1D_START}',
-  '{TODAY_END}',
-  '{TODAY-7D}',
-  '{TODAY-7D_COMPACT}',
-  '{TODAY_COMPACT}',
-];
-
 export const EMPTY_ENDPOINT = {
   name: '',
   url: '',
