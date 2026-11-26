@@ -12,7 +12,9 @@ import KeywordsView from './components/KeywordsView';
 import SmtpView from './components/SmtpView';
 import UsersView from './components/UsersView';
 import NotificationsBell from './components/NotificationsBell';
+import ThemeToggleButton from './components/ThemeToggleButton';
 import ConfigBackupModal from './components/ConfigBackupModal';
+import { useTheme } from './hooks/useTheme';
 import {
   Search,
   Clock,
@@ -49,6 +51,7 @@ export default function App() {
   const [backupModalOpen, setBackupModalOpen] = useState(false);
   const [viewRefreshKey, setViewRefreshKey] = useState(0);
   const [, setTick] = useState(0);
+  const { isDark, toggleTheme } = useTheme();
 
   const handleSelectTab = (tabId) => {
     setActiveTab(tabId);
@@ -164,7 +167,10 @@ export default function App() {
               <p className="text-xs font-semibold text-black truncate">
                 Zalogowany: <span className="underline">{auth.username}</span>
               </p>
-              <NotificationsBell />
+              <div className="flex items-center gap-1.5 shrink-0">
+                <ThemeToggleButton isDark={isDark} onToggle={toggleTheme} />
+                <NotificationsBell />
+              </div>
             </div>
           </div>
 
