@@ -107,7 +107,10 @@ public class TenderExecutionService {
                     "CRON [" + profile.getName() + "]"
             );
 
-            String statusMsg = "Zapisano: " + summary.savedCount() + " (Pobrano: " + summary.totalFetched() + ")";
+            String statusMsg = "Zapisano: " + summary.savedCount()
+                    + " (nowe: " + summary.newSavedCount()
+                    + ", już w bazie: " + summary.existingUpdatedCount()
+                    + " | Pobrano: " + summary.totalFetched() + ")";
             boolean hasErrors = false;
             List<String> errorReasons = new ArrayList<>();
 
@@ -115,6 +118,8 @@ public class TenderExecutionService {
             details.append("Profil: ").append(profile.getName()).append("\n")
                     .append("Pobrano ogłoszeń: ").append(summary.totalFetched())
                     .append(" | Zapisano (>0 pkt): ").append(summary.savedCount())
+                    .append(" (nowe: ").append(summary.newSavedCount())
+                    .append(", już w bazie / zakt.: ").append(summary.existingUpdatedCount()).append(")")
                     .append(" | Wykluczono: ").append(summary.excludedCount())
                     .append(" | Pominięto (0 pkt): ").append(summary.zeroScoreSkippedCount()).append("\n");
 
@@ -222,6 +227,8 @@ public class TenderExecutionService {
 
         int totalFetched = 0;
         int savedCount = 0;
+        int newSavedCount = 0;
+        int existingUpdatedCount = 0;
         int excludedCount = 0;
         int zeroScoreSkippedCount = 0;
         List<SourceLog> logs = new ArrayList<>();
@@ -236,6 +243,8 @@ public class TenderExecutionService {
                 List<TenderSourceFetchService.RawItem> rawItems = sourceFetchService.fetchItems(ep);
 
                 int epSaved = 0;
+                int epNewSaved = 0;
+                int epExistingUpdated = 0;
                 int epObservedUpdates = 0;
 
                 for (TenderSourceFetchService.RawItem item : rawItems) {
@@ -275,7 +284,9 @@ public class TenderExecutionService {
                         Tender obs = matchedObserved.get();
                         if (savedTendersInRun.put(obs.getId(), obs) == null) {
                             savedCount++;
+                            existingUpdatedCount++;
                             epSaved++;
+                            epExistingUpdated++;
                         }
                         continue;
                     }
@@ -291,15 +302,18 @@ public class TenderExecutionService {
                         t.setPublicationDate(nowPl);
                         return t;
                     });
+                    boolean isNewTender = (tender.getId() == null);
 
-                    if (tender.getId() != null && tender.getStatus() == TenderStatus.INTERESTED) {
+                    if (!isNewTender && tender.getStatus() == TenderStatus.INTERESTED) {
                         if (observedUpdateService.recordObservedUpdateIfChanged(
                                 tender, externalId, title, description, submissionDeadline, groupKey, nowPl)) {
                             epObservedUpdates++;
                         }
                         if (savedTendersInRun.put(tender.getId(), tender) == null) {
                             savedCount++;
+                            existingUpdatedCount++;
                             epSaved++;
+                            epExistingUpdated++;
                         }
                         continue;
                     }
@@ -315,12 +329,21 @@ public class TenderExecutionService {
                     if (savedTendersInRun.put(savedTender.getId(), savedTender) == null) {
                         savedCount++;
                         epSaved++;
+                        if (isNewTender) {
+                            newSavedCount++;
+                            epNewSaved++;
+                        } else {
+                            existingUpdatedCount++;
+                            epExistingUpdated++;
+                        }
                     }
                 }
 
                 ep.setLastSyncAt(dateService.nowPoland());
                 endpointRepository.save(ep);
-                String msg = "Zapisano " + epSaved + " przetargow (>0 pkt) z " + rawItems.size() + " pobranych.";
+                String msg = "Zapisano " + epSaved + " przetargów (>0 pkt) z " + rawItems.size()
+                        + " pobranych (nowych: " + epNewSaved
+                        + ", już w bazie / zakt.: " + epExistingUpdated + ").";
                 if (epObservedUpdates > 0) msg += " Wykryto " + epObservedUpdates + " aktualizacji obserwowanych.";
                 logs.add(new SourceLog(ep.getName(), true, epSaved, msg));
             } catch (Exception e) {
@@ -339,7 +362,16 @@ public class TenderExecutionService {
         run.setTenders(new ArrayList<>(savedTendersInRun.values()));
         FetchRun savedRun = fetchRunRepository.save(run);
 
-        return new ExecutionSummary(savedRun.getId(), totalFetched, savedCount, excludedCount, zeroScoreSkippedCount, logs);
+        return new ExecutionSummary(
+                savedRun.getId(),
+                totalFetched,
+                savedCount,
+                newSavedCount,
+                existingUpdatedCount,
+                excludedCount,
+                zeroScoreSkippedCount,
+                logs
+        );
     }
 
     // --- Delegacje fasadowe do wyspecjalizowanych serwisów ---
@@ -385,7 +417,16 @@ public class TenderExecutionService {
     }
 
     public record SourceLog(String sourceName, boolean success, int savedCount, String message) {}
-    public record ExecutionSummary(Long fetchRunId, int totalFetched, int savedCount, int excludedCount, int zeroScoreSkippedCount, List<SourceLog> logs) {}
+    public record ExecutionSummary(
+            Long fetchRunId,
+            int totalFetched,
+            int savedCount,
+            int newSavedCount,
+            int existingUpdatedCount,
+            int excludedCount,
+            int zeroScoreSkippedCount,
+            List<SourceLog> logs
+    ) {}
     public record ObservedCheckSummary(int checkedEndpoints, int observedTendersCount, int updatesFound, List<SourceLog> logs) {}
     public record ExcelExportResult(String filename, String base64, int count) {}
     public record EmailDispatchResult(boolean sent, String message, String base64, String filename) {}

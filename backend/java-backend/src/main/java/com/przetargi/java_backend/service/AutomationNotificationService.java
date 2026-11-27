@@ -119,7 +119,10 @@ public class AutomationNotificationService {
                 : "Automatyzacja zakończona: " + profile.getName());
         notif.setSummary(hasErrors
                 ? "Wystąpiły błędy (" + errorReasons.size() + "). " + errorReasons.get(0)
-                : "Pobrano: " + summary.totalFetched() + ", zapisano: " + summary.savedCount() + " przetargów.");
+                : "Pobrano: " + summary.totalFetched()
+                        + ", zapisano: " + summary.savedCount()
+                        + " (nowe: " + summary.newSavedCount()
+                        + ", już w bazie: " + summary.existingUpdatedCount() + ").");
         notif.setDetails(details != null ? details.trim() : "");
         notif.setIsRead(false);
         notif.setCreatedAt(nowPl);

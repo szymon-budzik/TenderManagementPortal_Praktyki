@@ -182,7 +182,7 @@ export default function SearchView() {
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
             <div className="p-3.5 bg-blue-50 border border-blue-300 rounded-lg">
               <div className="text-xs font-bold uppercase">Pobrano z API</div>
               <div className="text-2xl font-extrabold mt-1">{runResult.totalFetched}</div>
@@ -190,6 +190,18 @@ export default function SearchView() {
             <div className="p-3.5 bg-green-100 border border-green-600 rounded-lg">
               <div className="text-xs font-bold uppercase">Zapisano (&gt;0 pkt)</div>
               <div className="text-2xl font-extrabold mt-1">{runResult.savedCount}</div>
+            </div>
+            <div className="p-3.5 bg-emerald-50 border border-emerald-600 rounded-lg">
+              <div className="text-xs font-bold uppercase">Nowe w bazie</div>
+              <div className="text-2xl font-extrabold mt-1">
+                {runResult.newSavedCount ?? 0}
+              </div>
+            </div>
+            <div className="p-3.5 bg-amber-50 border border-amber-500 rounded-lg">
+              <div className="text-xs font-bold uppercase">Już w bazie / zakt.</div>
+              <div className="text-2xl font-extrabold mt-1">
+                {runResult.existingUpdatedCount ?? 0}
+              </div>
             </div>
             <div className="p-3.5 bg-red-100 border border-red-500 rounded-lg">
               <div className="text-xs font-bold uppercase">Wykluczone (Priorytet)</div>
