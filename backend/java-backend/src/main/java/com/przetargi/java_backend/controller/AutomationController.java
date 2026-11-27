@@ -12,6 +12,7 @@ import com.przetargi.java_backend.service.SmtpAccountService;
 import com.przetargi.java_backend.service.TenderExecutionService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -103,8 +104,9 @@ public class AutomationController {
     // --- HISTORIA POBRAŃ ---
 
     @GetMapping("/runs")
-    public ResponseEntity<List<FetchRunDto>> getRuns() {
-        return ResponseEntity.ok(automationService.getRuns());
+    public ResponseEntity<List<FetchRunDto>> getRuns(Authentication auth) {
+        String username = auth != null ? auth.getName() : null;
+        return ResponseEntity.ok(automationService.getRuns(username));
     }
 
     @DeleteMapping("/runs/{id}")
@@ -131,27 +133,34 @@ public class AutomationController {
         ));
     }
 
-    // --- POWIADOMIENIA AUTOMATYZACJI ---
+    // --- POWIADOMIENIA ---
 
     @GetMapping("/notifications")
-    public ResponseEntity<List<AutomationNotificationDto>> getNotifications() {
-        return ResponseEntity.ok(notificationService.getLatestNotifications());
+    public ResponseEntity<List<AutomationNotificationDto>> getNotifications(Authentication auth) {
+        String username = auth != null ? auth.getName() : null;
+        return ResponseEntity.ok(notificationService.getLatestNotifications(username));
     }
 
     @PatchMapping("/notifications/{id}/read")
-    public ResponseEntity<AutomationNotificationDto> markNotificationRead(@PathVariable Long id) {
-        return ResponseEntity.ok(notificationService.markAsRead(id));
+    public ResponseEntity<AutomationNotificationDto> markNotificationRead(
+            @PathVariable Long id,
+            Authentication auth
+    ) {
+        String username = auth != null ? auth.getName() : null;
+        return ResponseEntity.ok(notificationService.markAsRead(id, username));
     }
 
     @PatchMapping("/notifications/read-all")
-    public ResponseEntity<Void> markAllNotificationsRead() {
-        notificationService.markAllAsRead();
+    public ResponseEntity<Void> markAllNotificationsRead(Authentication auth) {
+        String username = auth != null ? auth.getName() : null;
+        notificationService.markAllAsRead(username);
         return ResponseEntity.noContent().build();
     }
 
     @DeleteMapping("/notifications/{id}")
-    public ResponseEntity<Void> deleteNotification(@PathVariable Long id) {
-        notificationService.deleteNotification(id);
+    public ResponseEntity<Void> deleteNotification(@PathVariable Long id, Authentication auth) {
+        String username = auth != null ? auth.getName() : null;
+        notificationService.deleteNotification(id, username);
         return ResponseEntity.noContent().build();
     }
 

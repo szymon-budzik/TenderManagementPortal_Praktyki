@@ -4,6 +4,7 @@ import com.przetargi.java_backend.dto.ApiEndpointDto;
 import com.przetargi.java_backend.service.ApiEndpointService;
 import com.przetargi.java_backend.service.TenderExecutionService;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -37,19 +38,32 @@ public class TenderSearchController {
     public ResponseEntity<TenderExecutionService.ExecutionSummary> runSearch(
             @RequestBody SearchRunRequest request
     ) {
+        String activeQuery = Boolean.TRUE.equals(request.useCategoryQuery())
+                ? request.categoryQuery()
+                : null;
         return ResponseEntity.ok(executionService.executeSearch(
                 request.endpointIds(),
                 request.keywordCategoryIds(),
                 request.matchMode(),
                 request.categoryMatchModes(),
+                activeQuery,
                 "MANUAL"
         ));
     }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ErrorMessage> handleIllegalArgument(IllegalArgumentException ex) {
+        return ResponseEntity.badRequest().body(new ErrorMessage(ex.getMessage()));
+    }
+
+    public record ErrorMessage(String message) {}
 
     public record SearchRunRequest(
             List<Long> endpointIds,
             List<Long> keywordCategoryIds,
             String matchMode,
-            Map<Long, String> categoryMatchModes
+            Map<Long, String> categoryMatchModes,
+            String categoryQuery,
+            Boolean useCategoryQuery
     ) {}
 }

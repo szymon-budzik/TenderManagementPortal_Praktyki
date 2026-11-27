@@ -12,7 +12,9 @@ public record FetchRunDto(
         Integer savedCount,
         Integer excludedCount,
         Integer zeroScoreCount,
-        OffsetDateTime createdAt
+        OffsetDateTime createdAt,
+        String sharedByUsername,
+        String sharedNote
 ) {
     public static FetchRunDto fromEntity(FetchRun r) {
         return new FetchRunDto(
@@ -23,7 +25,9 @@ public record FetchRunDto(
                 r.getSavedCount(),
                 r.getExcludedCount(),
                 r.getZeroScoreCount(),
-                r.getCreatedAt()
+                r.getCreatedAt(),
+                r.getSharedByUsername(),
+                r.getSharedNote()
         );
     }
 }

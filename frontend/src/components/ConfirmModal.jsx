@@ -87,49 +87,6 @@ export function SortableTh({ label, sortKey, sortConfig, onSort, className = '' 
   );
 }
 
-export function toggleSort(prevConfig, key) {
-  if (prevConfig?.key === key) {
-    return { key, direction: prevConfig.direction === 'asc' ? 'desc' : 'asc' };
-  }
-  return { key, direction: 'asc' };
-}
-
-export function sortArray(items, sortConfig, customGetters = {}) {
-  if (!sortConfig?.key) return items;
-  const { key, direction } = sortConfig;
-  const dir = direction === 'desc' ? -1 : 1;
-  const getter = customGetters[key] || ((item) => item?.[key]);
-
-  return [...items].sort((a, b) => {
-    let valA = getter(a);
-    let valB = getter(b);
-
-    if (valA == null) valA = '';
-    if (valB == null) valB = '';
-
-    if (typeof valA === 'boolean' && typeof valB === 'boolean') {
-      return (valA === valB ? 0 : valA ? -1 : 1) * dir;
-    }
-
-    if (typeof valA === 'number' && typeof valB === 'number') {
-      return (valA - valB) * dir;
-    }
-
-    const numA = Number(valA);
-    const numB = Number(valB);
-    if (valA !== '' && valB !== '' && !Number.isNaN(numA) && !Number.isNaN(numB)) {
-      return (numA - numB) * dir;
-    }
-
-    return (
-      String(valA).localeCompare(String(valB), 'pl', {
-        numeric: true,
-        sensitivity: 'base',
-      }) * dir
-    );
-  });
-}
-
 export function EmailTagsPreview({ rawEmails, onChange }) {
   const list = (rawEmails || '')
     .split(/[,;]/)

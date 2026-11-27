@@ -29,6 +29,14 @@ public class KeywordCategory {
     @Column(name = "is_excluded", nullable = false)
     private Boolean isExcluded;
 
+    @Builder.Default
+    @Column(nullable = false, length = 20)
+    private String color = "#93c5fd";
+
+    @Builder.Default
+    @Column(name = "light_text", nullable = false)
+    private Boolean lightText = false;
+
     @Column(name = "created_at", insertable = false, updatable = false)
     private OffsetDateTime createdAt;
 }

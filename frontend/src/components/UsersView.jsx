@@ -9,6 +9,7 @@ import {
   getEffectiveUserRole,
   setUserCustomRole,
   mapToBackendRole,
+  removeRoleFromResourceAccess,
 } from '../rolesStore';
 import { createUser, deleteUser, getUsers, updateUser } from '../services/usersApi';
 import { useSort } from '../hooks/useSort';
@@ -54,8 +55,18 @@ export default function UsersView() {
   }, []);
 
   useEffect(() => {
-    fetchUsers();
-  }, [fetchUsers]);
+    let cancelled = false;
+    getUsers()
+      .then((data) => {
+        if (!cancelled) setUsers(data);
+      })
+      .catch((err) => {
+        console.error('Błąd pobierania użytkowników:', err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const isProtectedAdminUser = (u) => {
     if (!u?.username) return false;
@@ -103,6 +114,7 @@ export default function UsersView() {
         const updated = roles.filter((r) => r.name !== roleName);
         setRoles(updated);
         saveRoles(updated);
+        removeRoleFromResourceAccess(roleName);
       },
     });
   };

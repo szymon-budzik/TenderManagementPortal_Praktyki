@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Layers } from 'lucide-react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { Layers, AlertCircle, X } from 'lucide-react';
 import ConfirmModal from './ConfirmModal';
 import AutomationProfileForm from './automation/AutomationProfileForm';
 import AutomationProfilesTable from './automation/AutomationProfilesTable';
+import { parseCategoryQuery } from './common/categoryQueryUtils';
 import {
   EMPTY_PROFILE_FORM,
   parseCategoryModesMap,
@@ -18,6 +19,8 @@ import {
 } from '../services/automationApi';
 import { getSearchSources } from '../services/endpointsApi';
 import { getKeywordCategories } from '../services/keywordsApi';
+import { RESOURCE_TYPES } from '../rolesStore';
+import { useAccessibleResources } from '../hooks/useAccessibleResources';
 import { useSort } from '../hooks/useSort';
 import { useConfirmDialog } from '../hooks/useConfirmDialog';
 import { usePolling } from '../hooks/usePolling';
@@ -31,6 +34,26 @@ export default function AutomationView() {
 
   const [editingProfileId, setEditingProfileId] = useState(null);
   const [profileForm, setProfileForm] = useState(EMPTY_PROFILE_FORM);
+  const [formError, setFormError] = useState('');
+
+  const accessibleEndpoints = useAccessibleResources(RESOURCE_TYPES.ENDPOINT, endpoints);
+  const accessibleCategories = useAccessibleResources(RESOURCE_TYPES.KEYWORD, categories);
+  const accessibleSmtpAccounts = useAccessibleResources(RESOURCE_TYPES.SMTP, smtpAccounts);
+
+  const effectiveProfileForm = useMemo(() => {
+    const allowedEp = new Set(accessibleEndpoints.map((e) => e.id));
+    const allowedCat = new Set(accessibleCategories.map((c) => c.id));
+    const allowedSmtp = new Set(accessibleSmtpAccounts.map((s) => String(s.id)));
+    return {
+      ...profileForm,
+      selectedEndpointIds: profileForm.selectedEndpointIds.filter((id) => allowedEp.has(id)),
+      selectedCategoryIds: profileForm.selectedCategoryIds.filter((id) => allowedCat.has(id)),
+      smtpAccountId:
+        profileForm.smtpAccountId && !allowedSmtp.has(String(profileForm.smtpAccountId))
+          ? ''
+          : profileForm.smtpAccountId,
+    };
+  }, [profileForm, accessibleEndpoints, accessibleCategories, accessibleSmtpAccounts]);
 
   const { confirmDialog, openConfirm, closeConfirm } = useConfirmDialog();
   const { toggleSort, sortedItems: sortedProfiles } = useSort(profiles, {
@@ -65,8 +88,27 @@ export default function AutomationView() {
   }, []);
 
   useEffect(() => {
-    fetchAll();
-  }, [fetchAll]);
+    let cancelled = false;
+    Promise.all([
+      getProfiles().catch(() => []),
+      getSmtpAccounts().catch(() => []),
+      getSearchSources().catch(() => []),
+      getKeywordCategories().catch(() => []),
+    ])
+      .then(([profData, smtpData, epData, catData]) => {
+        if (cancelled) return;
+        setProfiles(profData);
+        setSmtpAccounts(smtpData);
+        setEndpoints(epData);
+        setCategories(catData);
+      })
+      .catch((err) => {
+        console.error('Błąd pobierania danych profili automatyzacji:', err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   usePolling(refreshProfilesQuietly, 10000);
 
@@ -76,8 +118,17 @@ export default function AutomationView() {
   };
 
   const handleStartEditProfile = (p) => {
+    setFormError('');
     setEditingProfileId(p.id);
     const isInterval = (p.scheduleType || '').toUpperCase() === 'INTERVAL';
+    const allowedEp = new Set(accessibleEndpoints.map((e) => e.id));
+    const allowedCat = new Set(accessibleCategories.map((c) => c.id));
+    const allowedSmtp = new Set(accessibleSmtpAccounts.map((s) => String(s.id)));
+    const nextSmtpId =
+      p.smtpAccountId && allowedSmtp.has(String(p.smtpAccountId))
+        ? String(p.smtpAccountId)
+        : '';
+
     setProfileForm({
       name: p.name || '',
       enabled: Boolean(p.enabled),
@@ -85,43 +136,57 @@ export default function AutomationView() {
       scheduleType: isInterval ? 'INTERVAL' : 'SCHEDULE',
       cronTime: p.cronTime || '8:00',
       intervalMinutes: p.intervalMinutes || 60,
-      selectedEndpointIds: parseIdList(p.endpointIds),
-      selectedCategoryIds: parseIdList(p.categoryIds),
+      selectedEndpointIds: parseIdList(p.endpointIds).filter((id) => allowedEp.has(id)),
+      selectedCategoryIds: parseIdList(p.categoryIds).filter((id) => allowedCat.has(id)),
       categoryModes: parseCategoryModesMap(p.categoryIds, p.matchMode),
+      useCategoryQuery: Boolean(p.useCategoryQuery),
+      categoryQuery: p.categoryQuery || '',
       recipientEmails: p.recipientEmails || '',
-      smtpAccountId: p.smtpAccountId ? String(p.smtpAccountId) : '',
+      smtpAccountId: nextSmtpId,
     });
   };
 
   const handleSaveProfile = async (e) => {
     e.preventDefault();
-    if (
-      !profileForm.name.trim() ||
-      profileForm.selectedEndpointIds.length === 0 ||
-      profileForm.selectedCategoryIds.length === 0
-    ) {
+    setFormError('');
+    const usingQuery = Boolean(effectiveProfileForm.useCategoryQuery);
+    if (!effectiveProfileForm.name.trim() || effectiveProfileForm.selectedEndpointIds.length === 0) {
+      setFormError('Podaj nazwę profilu i zaznacz przynajmniej jeden endpoint.');
       return;
     }
 
-    const serializedCategories = profileForm.selectedCategoryIds
-      .map((id) => `${id}:${profileForm.categoryModes[id] || 'OR'}`)
+    if (usingQuery) {
+      const check = parseCategoryQuery(effectiveProfileForm.categoryQuery, accessibleCategories);
+      if (!check.valid) {
+        setFormError(check.error || 'Wpisz poprawne zapytanie kategorii.');
+        return;
+      }
+    } else if (effectiveProfileForm.selectedCategoryIds.length === 0) {
+      setFormError('Zaznacz przynajmniej jedną kategorię słów kluczowych.');
+      return;
+    }
+
+    const serializedCategories = effectiveProfileForm.selectedCategoryIds
+      .map((id) => `${id}:${effectiveProfileForm.categoryModes[id] || 'OR'}`)
       .join(',');
 
-    const hasSmtp = Boolean(profileForm.smtpAccountId);
+    const hasSmtp = Boolean(effectiveProfileForm.smtpAccountId);
 
     const payload = {
-      name: profileForm.name.trim(),
-      enabled: profileForm.enabled,
-      scheduleType: profileForm.scheduleType,
-      cronTime: profileForm.cronTime.trim() || '8:00',
-      intervalMinutes: Math.max(1, Number(profileForm.intervalMinutes) || 60),
+      name: effectiveProfileForm.name.trim(),
+      enabled: effectiveProfileForm.enabled,
+      scheduleType: effectiveProfileForm.scheduleType,
+      cronTime: effectiveProfileForm.cronTime.trim() || '8:00',
+      intervalMinutes: Math.max(1, Number(effectiveProfileForm.intervalMinutes) || 60),
       daysOfWeek: '',
       matchMode: 'OR',
-      endpointIds: profileForm.selectedEndpointIds.join(','),
-      categoryIds: serializedCategories,
-      recipientEmails: hasSmtp ? profileForm.recipientEmails.trim() : '',
-      smtpAccountId: hasSmtp ? Number(profileForm.smtpAccountId) : null,
-      notificationsEnabled: profileForm.notificationsEnabled,
+      endpointIds: effectiveProfileForm.selectedEndpointIds.join(','),
+      categoryIds: usingQuery ? '' : serializedCategories,
+      useCategoryQuery: usingQuery,
+      categoryQuery: usingQuery ? effectiveProfileForm.categoryQuery.trim() : null,
+      recipientEmails: hasSmtp ? effectiveProfileForm.recipientEmails.trim() : '',
+      smtpAccountId: hasSmtp ? Number(effectiveProfileForm.smtpAccountId) : null,
+      notificationsEnabled: effectiveProfileForm.notificationsEnabled,
     };
 
     try {
@@ -133,6 +198,7 @@ export default function AutomationView() {
       resetProfileForm();
       fetchAll();
     } catch (err) {
+      setFormError(err?.response?.data?.message || 'Błąd zapisu profilu automatyzacji.');
       console.error('Błąd zapisu profilu:', err);
     }
   };
@@ -232,13 +298,29 @@ export default function AutomationView() {
           )}
         </div>
 
+        {formError && (
+          <div className="p-3 bg-red-50 border border-red-500 rounded-xl text-xs font-bold text-black flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <AlertCircle size={15} className="text-red-600 shrink-0" />
+              <span>{formError}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setFormError('')}
+              className="p-0.5 rounded hover:bg-red-100 cursor-pointer"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
+
         <AutomationProfileForm
-          profileForm={profileForm}
+          profileForm={effectiveProfileForm}
           setProfileForm={setProfileForm}
           editingProfileId={editingProfileId}
-          endpoints={endpoints}
-          categories={categories}
-          smtpAccounts={smtpAccounts}
+          endpoints={accessibleEndpoints}
+          categories={accessibleCategories}
+          smtpAccounts={accessibleSmtpAccounts}
           onSubmit={handleSaveProfile}
         />
 

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import ConfirmModal from './ConfirmModal';
+import ResourceAccessModal from './ResourceAccessModal';
 import EndpointCreateForm from './endpoints/EndpointCreateForm';
 import EndpointsTable from './endpoints/EndpointsTable';
 import EndpointNoteModal from './endpoints/EndpointNoteModal';
@@ -17,6 +18,7 @@ import {
   updateEndpoint,
   updateEndpointNotes,
 } from '../services/endpointsApi';
+import { RESOURCE_TYPES, removeResourceAccess } from '../rolesStore';
 import { useSort } from '../hooks/useSort';
 import { usePagination } from '../hooks/usePagination';
 import { useConfirmDialog } from '../hooks/useConfirmDialog';
@@ -31,6 +33,8 @@ export default function EndpointsView() {
   const [copiedMarkdown, setCopiedMarkdown] = useState(false);
   const [noteModal, setNoteModal] = useState(null);
   const [savingNote, setSavingNote] = useState(false);
+  const [accessModalEndpoint, setAccessModalEndpoint] = useState(null);
+  const [, setAccessTick] = useState(0);
 
   const { confirmDialog, openConfirm, closeConfirm } = useConfirmDialog();
   const { toggleSort, sortedItems: sortedEndpoints } = useSort(endpoints, {
@@ -52,8 +56,18 @@ export default function EndpointsView() {
   }, []);
 
   useEffect(() => {
-    fetchEndpoints();
-  }, [fetchEndpoints]);
+    let cancelled = false;
+    getEndpoints()
+      .then((data) => {
+        if (!cancelled) setEndpoints(data);
+      })
+      .catch((err) => {
+        console.error('Błąd pobierania endpointów:', err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleCreate = async (payload) => {
     try {
@@ -112,6 +126,7 @@ export default function EndpointsView() {
       message: `Czy na pewno chcesz usunąć endpoint "${ep.name}"?`,
       onConfirm: async () => {
         await deleteEndpoint(ep.id);
+        removeResourceAccess(RESOURCE_TYPES.ENDPOINT, ep.id);
         fetchEndpoints();
       },
     });
@@ -228,6 +243,17 @@ export default function EndpointsView() {
         onClose={() => setTestModal(null)}
       />
 
+      <ResourceAccessModal
+        isOpen={Boolean(accessModalEndpoint)}
+        resourceType={RESOURCE_TYPES.ENDPOINT}
+        resourceTypeLabel="Endpoint"
+        resourceId={accessModalEndpoint?.id}
+        resourceName={accessModalEndpoint?.name}
+        usageHint="Wybierz, które role mogą korzystać z tego endpointu w Wyszukiwarce oraz w profilach Automatyzacji."
+        onClose={() => setAccessModalEndpoint(null)}
+        onSaved={() => setAccessTick((t) => t + 1)}
+      />
+
       <div>
         <h2 className="text-2xl font-bold text-black">
           Zarządzanie Źródłami Danych (API i Web Scraper)
@@ -257,6 +283,7 @@ export default function EndpointsView() {
         testingId={testingId}
         testStatuses={testStatuses}
         onOpenNote={(ep) => setNoteModal({ endpoint: ep, text: ep.notes || '' })}
+        onOpenAccess={(ep) => setAccessModalEndpoint(ep)}
         onConfirmDelete={confirmDelete}
       />
     </div>

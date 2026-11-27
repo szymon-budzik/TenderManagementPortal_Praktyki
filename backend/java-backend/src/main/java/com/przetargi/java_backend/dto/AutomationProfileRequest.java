@@ -15,5 +15,7 @@ public record AutomationProfileRequest(
         String endpointIds,
         String categoryIds,
         String recipientEmails,
-        Boolean notificationsEnabled
+        Boolean notificationsEnabled,
+        String categoryQuery,
+        Boolean useCategoryQuery
 ) {}

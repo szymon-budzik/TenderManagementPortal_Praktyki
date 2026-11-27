@@ -13,7 +13,8 @@ public record AutomationNotificationDto(
         String summary,
         String details,
         Boolean isRead,
-        OffsetDateTime createdAt
+        OffsetDateTime createdAt,
+        String notificationType
 ) {
     public static AutomationNotificationDto fromEntity(AutomationNotification n) {
         return new AutomationNotificationDto(
@@ -25,7 +26,8 @@ public record AutomationNotificationDto(
                 n.getSummary(),
                 n.getDetails(),
                 n.getIsRead(),
-                n.getCreatedAt()
+                n.getCreatedAt(),
+                n.getNotificationType() != null ? n.getNotificationType() : "AUTOMATION"
         );
     }
 }

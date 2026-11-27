@@ -39,6 +39,12 @@ public class SecurityConfig {
                 .requestMatchers("/api/internal/**").permitAll()
                 // Panel admina
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")
+                // Konfiguracje AI (dostępem do zakładki steruje system ról w panelu)
+                .requestMatchers("/api/ai-configs/**").authenticated()
+                // Grupy i podgrupy (dostępem do zakładki steruje system ról w panelu)
+                .requestMatchers("/api/groups/**").authenticated()
+                // Przesyłanie przetargów i raportów między użytkownikami w grupach
+                .requestMatchers("/api/shares/**").authenticated()
                 // Reszta wymaga uwierzytelnienia
                 .anyRequest().authenticated()
             )

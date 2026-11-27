@@ -1,4 +1,4 @@
-import { Download, Mail } from 'lucide-react';
+import { Download, Mail, Send } from 'lucide-react';
 import { parseEmailTags } from './reportUtils';
 
 export default function ReportsDispatchBar({
@@ -11,6 +11,7 @@ export default function ReportsDispatchBar({
   loadingAction,
   onSendEmail,
   onDownloadExcel,
+  onShareInApp,
 }) {
   const manualEmailTags = parseEmailTags(manualEmails);
   const isNoSmtp = !manualSmtpId;
@@ -39,7 +40,7 @@ export default function ReportsDispatchBar({
           </select>
         </div>
 
-        <div className="md:col-span-5">
+        <div className="md:col-span-4">
           <label
             className={`block text-xs font-extrabold uppercase mb-1 ${
               isNoSmtp ? 'text-slate-400' : 'text-black'
@@ -65,7 +66,7 @@ export default function ReportsDispatchBar({
           />
         </div>
 
-        <div className="md:col-span-2">
+        <div className="md:col-span-5 grid grid-cols-1 sm:grid-cols-3 gap-2">
           <button
             type="button"
             disabled={loadingAction || isNoSmtp || selectedCount === 0 || !manualEmails.trim()}
@@ -73,11 +74,22 @@ export default function ReportsDispatchBar({
             className="w-full flex items-center justify-center gap-1.5 py-2.5 px-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white font-extrabold rounded-lg text-xs cursor-pointer"
           >
             <Mail size={15} />
-            Wyślij Excel
+            Wyślij SMTP
           </button>
-        </div>
 
-        <div className="md:col-span-2">
+          {onShareInApp && (
+            <button
+              type="button"
+              disabled={loadingAction || selectedCount === 0}
+              onClick={onShareInApp}
+              title="Prześlij wybrane raporty bezpośrednio do użytkownika z Twojej grupy/podgrupy"
+              className="w-full flex items-center justify-center gap-1.5 py-2.5 px-3 bg-purple-200 hover:bg-purple-300 disabled:opacity-40 border-2 border-purple-800 text-black font-extrabold rounded-lg text-xs cursor-pointer"
+            >
+              <Send size={14} />
+              Prześlij w grupie
+            </button>
+          )}
+
           <button
             type="button"
             disabled={loadingAction || selectedCount === 0}

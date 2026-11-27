@@ -46,6 +46,15 @@ public class FetchRun {
     @Column(name = "created_at")
     private OffsetDateTime createdAt;
 
+    @Column(name = "target_user_id")
+    private Long targetUserId;
+
+    @Column(name = "shared_by_username", length = 100)
+    private String sharedByUsername;
+
+    @Column(name = "shared_note", length = 500)
+    private String sharedNote;
+
     @ManyToMany(fetch = FetchType.EAGER)
     @JoinTable(
             name = "fetch_run_tenders",
@@ -94,4 +103,13 @@ public class FetchRun {
 
     public Set<TenderUpdate> getTenderUpdates() { return tenderUpdates; }
     public void setTenderUpdates(Set<TenderUpdate> tenderUpdates) { this.tenderUpdates = tenderUpdates; }
+
+    public Long getTargetUserId() { return targetUserId; }
+    public void setTargetUserId(Long targetUserId) { this.targetUserId = targetUserId; }
+
+    public String getSharedByUsername() { return sharedByUsername; }
+    public void setSharedByUsername(String sharedByUsername) { this.sharedByUsername = sharedByUsername; }
+
+    public String getSharedNote() { return sharedNote; }
+    public void setSharedNote(String sharedNote) { this.sharedNote = sharedNote; }
 }

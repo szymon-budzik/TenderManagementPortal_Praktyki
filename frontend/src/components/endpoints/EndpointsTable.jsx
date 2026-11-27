@@ -3,11 +3,13 @@ import {
   Link2,
   Lightbulb,
   StickyNote,
+  Shield,
   Check,
   X,
   Pencil,
   Trash2,
 } from 'lucide-react';
+import { RESOURCE_TYPES, getResourceAccessSummary } from '../../rolesStore';
 import {
   PAGE_SIZE,
   formatJsonField,
@@ -33,6 +35,7 @@ export default function EndpointsTable({
   testingId,
   testStatuses,
   onOpenNote,
+  onOpenAccess,
   onConfirmDelete,
 }) {
   const editPostJsonStatus =
@@ -91,6 +94,7 @@ export default function EndpointsTable({
                 const isEditing = editingId === ep.id;
                 const testState = testStatuses[ep.id];
                 const hasNote = Boolean(ep.notes && ep.notes.trim().length > 0);
+                const accessSummary = getResourceAccessSummary(RESOURCE_TYPES.ENDPOINT, ep.id);
                 const epSelectorTags =
                   ep.httpMethod === 'SCRAPER' ? parseSelectorTags(ep.payload) : [];
 
@@ -359,6 +363,24 @@ export default function EndpointsTable({
                               <Trash2 size={13} /> Usuń
                             </button>
                           </>
+                        )}
+
+                        {onOpenAccess && (
+                          <button
+                            type="button"
+                            onClick={() => onOpenAccess(ep)}
+                            title="Ustaw, które role mają dostęp do tego endpointu"
+                            className={`col-span-2 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 border rounded-lg font-bold text-xs cursor-pointer transition ${
+                              accessSummary.isRestricted
+                                ? 'bg-amber-100 hover:bg-amber-200 border-amber-600 text-black'
+                                : 'bg-white hover:bg-blue-50 border-blue-400 text-black'
+                            }`}
+                          >
+                            <Shield size={13} />
+                            {accessSummary.isRestricted
+                              ? `Dostęp ról (${accessSummary.allowedCount}/${accessSummary.totalRoles})`
+                              : 'Dostęp ról'}
+                          </button>
                         )}
                       </div>
                     </td>

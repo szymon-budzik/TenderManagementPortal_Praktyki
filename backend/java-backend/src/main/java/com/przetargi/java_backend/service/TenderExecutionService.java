@@ -37,6 +37,7 @@ public class TenderExecutionService {
     private final TenderDateService dateService;
     private final TenderSourceFetchService sourceFetchService;
     private final KeywordMatchingService keywordMatchingService;
+    private final CategoryQueryService categoryQueryService;
     private final ObservedTenderUpdateService observedUpdateService;
     private final ReportExportService reportExportService;
     private final ReportEmailService reportEmailService;
@@ -51,6 +52,7 @@ public class TenderExecutionService {
             TenderDateService dateService,
             TenderSourceFetchService sourceFetchService,
             KeywordMatchingService keywordMatchingService,
+            CategoryQueryService categoryQueryService,
             ObservedTenderUpdateService observedUpdateService,
             ReportExportService reportExportService,
             ReportEmailService reportEmailService,
@@ -64,6 +66,7 @@ public class TenderExecutionService {
         this.dateService = dateService;
         this.sourceFetchService = sourceFetchService;
         this.keywordMatchingService = keywordMatchingService;
+        this.categoryQueryService = categoryQueryService;
         this.observedUpdateService = observedUpdateService;
         this.reportExportService = reportExportService;
         this.reportEmailService = reportEmailService;
@@ -81,6 +84,9 @@ public class TenderExecutionService {
 
         try {
             List<Long> epIds = keywordMatchingService.parseIds(profile.getEndpointIds());
+            boolean useQuery = Boolean.TRUE.equals(profile.getUseCategoryQuery())
+                    && profile.getCategoryQuery() != null
+                    && !profile.getCategoryQuery().isBlank();
             Map<Long, String> catModes = keywordMatchingService.parseCategoryIdsWithModes(
                     profile.getCategoryIds(), profile.getMatchMode());
             List<Long> catIds = new ArrayList<>(catModes.keySet());
@@ -88,12 +94,18 @@ public class TenderExecutionService {
             if (epIds.isEmpty()) {
                 throw new IllegalArgumentException("Profil nie ma przypisanych żadnych endpointów.");
             }
-            if (catIds.isEmpty()) {
+            if (!useQuery && catIds.isEmpty()) {
                 throw new IllegalArgumentException("Profil nie ma przypisanych żadnych kategorii słów kluczowych.");
             }
 
             ExecutionSummary summary = executeSearch(
-                    epIds, catIds, profile.getMatchMode(), catModes, "CRON [" + profile.getName() + "]");
+                    epIds,
+                    catIds,
+                    profile.getMatchMode(),
+                    catModes,
+                    useQuery ? profile.getCategoryQuery() : null,
+                    "CRON [" + profile.getName() + "]"
+            );
 
             String statusMsg = "Zapisano: " + summary.savedCount() + " (Pobrano: " + summary.totalFetched() + ")";
             boolean hasErrors = false;
@@ -170,7 +182,7 @@ public class TenderExecutionService {
     }
 
     public ExecutionSummary executeSearch(List<Long> endpointIds, List<Long> categoryIds, String matchMode, String sourceType) {
-        return executeSearch(endpointIds, categoryIds, matchMode, null, sourceType);
+        return executeSearch(endpointIds, categoryIds, matchMode, null, null, sourceType);
     }
 
     public ExecutionSummary executeSearch(
@@ -180,9 +192,32 @@ public class TenderExecutionService {
             Map<Long, String> categoryMatchModes,
             String sourceType
     ) {
+        return executeSearch(endpointIds, categoryIds, matchMode, categoryMatchModes, null, sourceType);
+    }
+
+    public ExecutionSummary executeSearch(
+            List<Long> endpointIds,
+            List<Long> categoryIds,
+            String matchMode,
+            Map<Long, String> categoryMatchModes,
+            String categoryQuery,
+            String sourceType
+    ) {
         String fallbackMode = (matchMode != null && !matchMode.isBlank()) ? matchMode : "OR";
         List<ApiEndpoint> selectedEndpoints = endpointRepository.findAllById(endpointIds != null ? endpointIds : List.of());
-        List<KeywordCategory> selectedCategories = keywordCategoryRepository.findAllById(categoryIds != null ? categoryIds : List.of());
+        boolean usingQuery = categoryQuery != null && !categoryQuery.isBlank();
+        List<KeywordCategory> selectedCategories;
+        CategoryQueryService.ParsedQuery parsedQuery = null;
+
+        if (usingQuery) {
+            List<KeywordCategory> availableCategories = (categoryIds != null && !categoryIds.isEmpty())
+                    ? keywordCategoryRepository.findAllById(categoryIds)
+                    : keywordCategoryRepository.findAll();
+            parsedQuery = categoryQueryService.parse(categoryQuery, availableCategories);
+            selectedCategories = parsedQuery.referencedCategories();
+        } else {
+            selectedCategories = keywordCategoryRepository.findAllById(categoryIds != null ? categoryIds : List.of());
+        }
         List<Tender> observedTenders = tenderRepository.findByStatusOrderByIdAsc(TenderStatus.INTERESTED);
 
         int totalFetched = 0;
@@ -222,8 +257,10 @@ public class TenderExecutionService {
                         }
                     }
 
-                    KeywordMatchingService.ScoreEvaluation evaluation = keywordMatchingService.evaluate(
-                            title, description, selectedCategories, categoryMatchModes, fallbackMode);
+                    KeywordMatchingService.ScoreEvaluation evaluation = (parsedQuery != null)
+                            ? categoryQueryService.evaluate(title, description, parsedQuery)
+                            : keywordMatchingService.evaluate(
+                                    title, description, selectedCategories, categoryMatchModes, fallbackMode);
                     if (evaluation.excluded()) {
                         excludedCount++;
                         continue;

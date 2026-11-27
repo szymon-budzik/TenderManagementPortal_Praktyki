@@ -1,20 +1,15 @@
 import { useMemo } from 'react';
 import { Tag } from 'lucide-react';
-
-const CATEGORY_PALETTES = [
-  'bg-yellow-200 text-black border-yellow-600',
-  'bg-emerald-200 text-black border-emerald-700',
-  'bg-sky-200 text-black border-sky-700',
-  'bg-violet-200 text-black border-violet-700',
-  'bg-rose-200 text-black border-rose-700',
-  'bg-orange-200 text-black border-orange-700',
-];
+import {
+  DEFAULT_CATEGORY_COLOR,
+  getCategoryHighlightStyle,
+} from './keywords/categoryColorPresets';
 
 function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-export function extractMatchedCategoryNames(description) {
+function extractMatchedCategoryNames(description) {
   if (!description) return [];
   const line = description
     .split('\n')
@@ -31,7 +26,7 @@ export function extractMatchedCategoryNames(description) {
     .filter(Boolean);
 }
 
-export function buildHighlightRules(categories = [], allowedCategoryNames = []) {
+function buildHighlightRules(categories = [], allowedCategoryNames = []) {
   if (!Array.isArray(categories) || categories.length === 0) return [];
 
   const allowedSet =
@@ -40,14 +35,15 @@ export function buildHighlightRules(categories = [], allowedCategoryNames = []) 
       : null;
 
   const rules = [];
-  let paletteIdx = 0;
 
   categories.forEach((cat) => {
     if (!cat || cat.isExcluded || !cat.keywords) return;
     if (allowedSet && !allowedSet.has((cat.name || '').trim().toLowerCase())) return;
 
-    const colorClass = CATEGORY_PALETTES[paletteIdx % CATEGORY_PALETTES.length];
-    paletteIdx++;
+    const highlightStyle = getCategoryHighlightStyle(
+      cat.color || DEFAULT_CATEGORY_COLOR,
+      Boolean(cat.lightText)
+    );
 
     const fallbackScore = cat.score ?? 50;
 
@@ -93,7 +89,7 @@ export function buildHighlightRules(categories = [], allowedCategoryNames = []) 
           word,
           weight,
           categoryName: cat.name,
-          colorClass,
+          highlightStyle,
           regex: new RegExp(patternStr, 'giu'),
         });
       } catch {
@@ -153,7 +149,7 @@ export function MatchedKeywordsSummary({ text, categories, descriptionForFilter,
           word: m.rule.word,
           categoryName: m.rule.categoryName,
           weight: m.rule.weight,
-          colorClass: m.rule.colorClass,
+          highlightStyle: m.rule.highlightStyle,
           count: 1,
         });
       } else {
@@ -174,10 +170,11 @@ export function MatchedKeywordsSummary({ text, categories, descriptionForFilter,
         <span
           key={idx}
           title={`Kategoria: ${hit.categoryName} (+${hit.weight} pkt)`}
-          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border text-[11px] font-extrabold ${hit.colorClass}`}
+          style={hit.highlightStyle}
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border text-[11px] font-extrabold"
         >
           <span>{hit.word}</span>
-          <span className="opacity-75 text-[10px]">
+          <span className="opacity-80 text-[10px]">
             ({hit.categoryName} +{hit.weight})
           </span>
         </span>
@@ -236,7 +233,8 @@ export default function HighlightedText({
           <mark
             key={idx}
             title={`Kategoria: ${seg.rule.categoryName} | Słowo: ${seg.rule.word} (+${seg.rule.weight} pkt)`}
-            className={`px-1 py-0.5 rounded border font-extrabold ${seg.rule.colorClass}`}
+            style={seg.rule.highlightStyle}
+            className="px-1 py-0.5 rounded border font-extrabold"
           >
             {seg.content}
           </mark>

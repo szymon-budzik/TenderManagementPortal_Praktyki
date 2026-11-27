@@ -59,6 +59,12 @@ public class AutomationProfile {
     @Column(name = "notifications_enabled", nullable = false)
     private Boolean notificationsEnabled = true;
 
+    @Column(name = "category_query", columnDefinition = "TEXT")
+    private String categoryQuery;
+
+    @Column(name = "use_category_query", nullable = false)
+    private Boolean useCategoryQuery = false;
+
     public AutomationProfile() {
     }
 
@@ -106,4 +112,10 @@ public class AutomationProfile {
 
     public Boolean getNotificationsEnabled() { return notificationsEnabled; }
     public void setNotificationsEnabled(Boolean notificationsEnabled) { this.notificationsEnabled = notificationsEnabled; }
+
+    public String getCategoryQuery() { return categoryQuery; }
+    public void setCategoryQuery(String categoryQuery) { this.categoryQuery = categoryQuery; }
+
+    public Boolean getUseCategoryQuery() { return useCategoryQuery; }
+    public void setUseCategoryQuery(Boolean useCategoryQuery) { this.useCategoryQuery = useCategoryQuery; }
 }

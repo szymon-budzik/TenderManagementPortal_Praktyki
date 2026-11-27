@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
-import { FileSpreadsheet } from 'lucide-react';
+import { FileSpreadsheet, CheckCircle2, X } from 'lucide-react';
 import ConfirmModal from './ConfirmModal';
+import ShareModal from './ShareModal';
 import ReportsDispatchBar from './reports/ReportsDispatchBar';
 import ReportsRunsTable from './reports/ReportsRunsTable';
 import { downloadBase64Excel } from './reports/reportUtils';
@@ -11,20 +12,31 @@ import {
   getSmtpAccounts,
   sendRunsEmail,
 } from '../services/automationApi';
+import { RESOURCE_TYPES } from '../rolesStore';
+import { useAccessibleResources } from '../hooks/useAccessibleResources';
 import { useSort } from '../hooks/useSort';
 import { useConfirmDialog } from '../hooks/useConfirmDialog';
 import { usePolling } from '../hooks/usePolling';
 
 export default function ReportsView() {
   const [runs, setRuns] = useState([]);
-  const [smtpAccounts, setSmtpAccounts] = useState([]);
+  const [allSmtpAccounts, setAllSmtpAccounts] = useState([]);
   const [selectedRunIds, setSelectedRunIds] = useState([]);
   const [manualEmails, setManualEmails] = useState('');
   const [manualSmtpId, setManualSmtpId] = useState('');
   const [loadingAction, setLoadingAction] = useState(false);
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [shareFeedback, setShareFeedback] = useState('');
 
   const { confirmDialog, openConfirm, closeConfirm } = useConfirmDialog();
   const { toggleSort, sortedItems: sortedRuns } = useSort(runs, { key: 'id', dir: 'desc' });
+
+  const smtpAccounts = useAccessibleResources(RESOURCE_TYPES.SMTP, allSmtpAccounts);
+
+  const effectiveManualSmtpId =
+    manualSmtpId && smtpAccounts.some((acc) => String(acc.id) === String(manualSmtpId))
+      ? manualSmtpId
+      : '';
 
   const fetchReportsData = useCallback(async () => {
     try {
@@ -33,7 +45,7 @@ export default function ReportsView() {
         getSmtpAccounts().catch(() => []),
       ]);
       setRuns(runsData);
-      setSmtpAccounts(smtpData);
+      setAllSmtpAccounts(smtpData);
     } catch (err) {
       console.error('Błąd pobierania raportów:', err);
     }
@@ -49,8 +61,20 @@ export default function ReportsView() {
   }, []);
 
   useEffect(() => {
-    fetchReportsData();
-  }, [fetchReportsData]);
+    let cancelled = false;
+    Promise.all([getRuns().catch(() => []), getSmtpAccounts().catch(() => [])])
+      .then(([runsData, smtpData]) => {
+        if (cancelled) return;
+        setRuns(runsData);
+        setAllSmtpAccounts(smtpData);
+      })
+      .catch((err) => {
+        console.error('Błąd pobierania raportów:', err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   usePolling(refreshRunsQuietly, 10000);
 
@@ -74,13 +98,13 @@ export default function ReportsView() {
   };
 
   const handleSendSelectedByEmail = async () => {
-    if (selectedRunIds.length === 0 || !manualSmtpId || !manualEmails.trim()) return;
+    if (selectedRunIds.length === 0 || !effectiveManualSmtpId || !manualEmails.trim()) return;
     setLoadingAction(true);
     try {
       await sendRunsEmail({
         runIds: selectedRunIds,
         emails: manualEmails,
-        smtpAccountId: Number(manualSmtpId),
+        smtpAccountId: Number(effectiveManualSmtpId),
       });
     } catch (err) {
       console.error('Błąd wysyłki e-mail:', err);
@@ -115,6 +139,17 @@ export default function ReportsView() {
           onClose={closeConfirm}
         />
       )}
+
+      <ShareModal
+        isOpen={shareModalOpen}
+        mode="REPORTS"
+        itemIds={selectedRunIds}
+        onClose={() => setShareModalOpen(false)}
+        onShared={(res) => {
+          setSelectedRunIds([]);
+          setShareFeedback(res?.message || 'Przesłano wybrane raporty w systemie.');
+        }}
+      />
 
       <div>
         <h2 className="text-2xl font-extrabold text-black">
@@ -157,9 +192,25 @@ export default function ReportsView() {
           </div>
         </div>
 
+        {shareFeedback && (
+          <div className="p-3 bg-green-50 border border-green-700 rounded-xl text-xs font-extrabold text-black flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 size={15} className="text-green-700 shrink-0" />
+              <span>{shareFeedback}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShareFeedback('')}
+              className="p-0.5 rounded hover:bg-green-100 cursor-pointer"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
+
         <ReportsDispatchBar
           smtpAccounts={smtpAccounts}
-          manualSmtpId={manualSmtpId}
+          manualSmtpId={effectiveManualSmtpId}
           onManualSmtpIdChange={setManualSmtpId}
           manualEmails={manualEmails}
           onManualEmailsChange={setManualEmails}
@@ -167,6 +218,7 @@ export default function ReportsView() {
           loadingAction={loadingAction}
           onSendEmail={handleSendSelectedByEmail}
           onDownloadExcel={handleDownloadSelectedExcel}
+          onShareInApp={() => setShareModalOpen(true)}
         />
 
         <ReportsRunsTable

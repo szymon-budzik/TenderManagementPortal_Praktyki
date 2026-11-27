@@ -1,4 +1,5 @@
 import { ArrowUpDown, Bell, BellOff, Play, Pencil, Trash2 } from 'lucide-react';
+import CategoryQueryTags from '../common/CategoryQueryTags';
 import {
   formatSingleScheduleTag,
   parseCategoryModesMap,
@@ -142,8 +143,21 @@ export default function AutomationProfilesTable({
                       )}
                     </div>
                     <div>
-                      <span className="font-extrabold">Kategorie ({catLabels.length}): </span>
-                      <span>{catLabels.join(', ') || 'Brak'}</span>
+                      {p.useCategoryQuery && p.categoryQuery ? (
+                        <div className="space-y-1">
+                          <span className="font-extrabold">Zapytanie kategorii: </span>
+                          <CategoryQueryTags
+                            query={p.categoryQuery}
+                            categories={categories}
+                            compact={true}
+                          />
+                        </div>
+                      ) : (
+                        <>
+                          <span className="font-extrabold">Kategorie ({catLabels.length}): </span>
+                          <span>{catLabels.join(', ') || 'Brak'}</span>
+                        </>
+                      )}
                     </div>
                   </td>
 

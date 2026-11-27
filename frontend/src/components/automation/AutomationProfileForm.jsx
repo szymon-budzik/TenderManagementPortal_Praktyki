@@ -7,7 +7,10 @@ import {
   Clock,
   HelpCircle,
   Bell,
+  ListChecks,
+  Code2,
 } from 'lucide-react';
+import CategoryQueryEditor from '../common/CategoryQueryEditor';
 import {
   formatSingleScheduleTag,
   parseEmailTags,
@@ -358,34 +361,76 @@ export default function AutomationProfileForm({
         </div>
 
         <div className="bg-white p-4 rounded-xl border border-blue-200 space-y-2.5">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="text-xs font-extrabold uppercase flex items-center gap-1.5">
               <KeyRound size={15} className="text-blue-600" />
-              Przypisz Kategorie ({profileForm.selectedCategoryIds.length}) — kliknij OR/AND
+              {profileForm.useCategoryQuery
+                ? 'Zapytanie Kategorii'
+                : `Przypisz Kategorie (${profileForm.selectedCategoryIds.length}) — kliknij OR/AND`}
             </span>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() =>
-                  setProfileForm({
-                    ...profileForm,
-                    selectedCategoryIds: categories.map((c) => c.id),
-                  })
-                }
-                className="text-[11px] font-bold text-blue-700 hover:underline cursor-pointer"
-              >
-                Wszystkie
-              </button>
-              <button
-                type="button"
-                onClick={() => setProfileForm({ ...profileForm, selectedCategoryIds: [] })}
-                className="text-[11px] font-bold text-black hover:underline cursor-pointer"
-              >
-                Wyczyść
-              </button>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex rounded-md border border-blue-500 overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setProfileForm({ ...profileForm, useCategoryQuery: false })}
+                  className={`inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-extrabold cursor-pointer transition ${
+                    !profileForm.useCategoryQuery
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-white text-black hover:bg-blue-50'
+                  }`}
+                >
+                  <ListChecks size={12} /> Lista
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setProfileForm({ ...profileForm, useCategoryQuery: true })}
+                  className={`inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-extrabold cursor-pointer transition ${
+                    profileForm.useCategoryQuery
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-white text-black hover:bg-blue-50'
+                  }`}
+                >
+                  <Code2 size={12} /> Zapytanie
+                </button>
+              </div>
+
+              {!profileForm.useCategoryQuery && (
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setProfileForm({
+                        ...profileForm,
+                        selectedCategoryIds: categories.map((c) => c.id),
+                      })
+                    }
+                    className="text-[11px] font-bold text-blue-700 hover:underline cursor-pointer"
+                  >
+                    Wszystkie
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setProfileForm({ ...profileForm, selectedCategoryIds: [] })}
+                    className="text-[11px] font-bold text-black hover:underline cursor-pointer"
+                  >
+                    Wyczyść
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
+          {profileForm.useCategoryQuery ? (
+            <CategoryQueryEditor
+              value={profileForm.categoryQuery || ''}
+              onChange={(nextQuery) =>
+                setProfileForm({ ...profileForm, categoryQuery: nextQuery })
+              }
+              categories={categories}
+              compact={true}
+            />
+          ) : (
           <div className="max-h-44 overflow-y-auto space-y-1.5 pr-1">
             {categories.length === 0 ? (
               <p className="text-xs text-black">Brak zdefiniowanych kategorii.</p>
@@ -433,6 +478,7 @@ export default function AutomationProfileForm({
               })
             )}
           </div>
+          )}
         </div>
       </div>
 

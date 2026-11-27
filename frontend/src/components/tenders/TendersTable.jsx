@@ -1,4 +1,4 @@
-import { ArrowUpDown, Clock, Eye, Trash2 } from 'lucide-react';
+import { ArrowUpDown, Clock, Eye, Send, Trash2 } from 'lucide-react';
 import {
   formatDateTimePl,
   getShortHoursBadge,
@@ -12,18 +12,34 @@ export default function TendersTable({
   nowMs,
   currentPage,
   totalPages,
+  selectedTenderIds = [],
+  onToggleSelectTender,
+  onToggleSelectPage,
+  onShareSingleTender,
   onPageChange,
   onToggleSort,
   onSelectTender,
   onToggleStatus,
   onConfirmDelete,
 }) {
+  const allOnPageSelected =
+    tenders.length > 0 && tenders.every((t) => selectedTenderIds.includes(t.id));
+
   return (
     <>
       <div className="bg-white rounded-xl border border-blue-200 overflow-x-auto shadow-xs">
-        <table className="w-full text-left border-collapse table-fixed min-w-[1120px]">
+        <table className="w-full text-left border-collapse table-fixed min-w-[1180px]">
           <thead>
             <tr className="bg-blue-600 text-white text-xs uppercase tracking-wide select-none">
+              <th className="px-3 py-4 font-bold w-12 text-center">
+                <input
+                  type="checkbox"
+                  checked={allOnPageSelected}
+                  onChange={onToggleSelectPage}
+                  title="Zaznacz wszystkie na stronie"
+                  className="w-4 h-4 accent-white cursor-pointer"
+                />
+              </th>
               <th
                 onClick={() => onToggleSort('externalId')}
                 className="px-3.5 py-4 font-bold w-24 cursor-pointer hover:bg-blue-700 whitespace-nowrap"
@@ -79,7 +95,7 @@ export default function TendersTable({
           <tbody className="divide-y divide-blue-100 text-sm text-black">
             {tenders.length === 0 ? (
               <tr>
-                <td colSpan="7" className="p-6 text-center font-medium text-black">
+                <td colSpan="8" className="p-6 text-center font-medium text-black">
                   Brak przetargów spełniających wybrane kryteria.
                 </td>
               </tr>
@@ -89,13 +105,27 @@ export default function TendersTable({
                 const sourceName = getTenderSource(t);
                 const deadlineIso = getTenderDeadlineIso(t);
                 const hoursBadge = getShortHoursBadge(deadlineIso, nowMs);
+                const isSelected = selectedTenderIds.includes(t.id);
 
                 return (
                   <tr
                     key={t.id}
                     onClick={() => onSelectTender(t)}
-                    className="hover:bg-blue-50/80 transition cursor-pointer"
+                    className={`transition cursor-pointer ${
+                      isSelected ? 'bg-blue-100/70' : 'hover:bg-blue-50/80'
+                    }`}
                   >
+                    <td
+                      className="px-3 py-3 align-middle text-center"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => onToggleSelectTender && onToggleSelectTender(t.id)}
+                        className="w-4 h-4 accent-blue-600 cursor-pointer"
+                      />
+                    </td>
                     <td className="px-3.5 py-3 align-middle">
                       <div
                         title={t.externalId}
@@ -189,6 +219,16 @@ export default function TendersTable({
                         >
                           <Eye size={13} /> Szczegóły
                         </button>
+                        {onShareSingleTender && (
+                          <button
+                            type="button"
+                            onClick={(e) => onShareSingleTender(e, t)}
+                            title="Prześlij przetarg osobie ze swojej grupy/podgrupy"
+                            className="inline-flex items-center justify-center gap-1 px-2.5 py-1 bg-blue-50 border border-blue-400 hover:bg-blue-100 text-black rounded-lg font-bold text-xs cursor-pointer"
+                          >
+                            <Send size={12} /> Prześlij
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={(e) => onConfirmDelete(e, t)}

@@ -20,6 +20,8 @@ public class KeywordCategoryDto {
 
     private Integer score;
     private Boolean isExcluded;
+    private String color;
+    private Boolean lightText;
 
     public static KeywordCategoryDto fromEntity(KeywordCategory entity) {
         return KeywordCategoryDto.builder()
@@ -28,6 +30,8 @@ public class KeywordCategoryDto {
             .keywords(entity.getKeywords())
             .score(entity.getScore())
             .isExcluded(entity.getIsExcluded())
+            .color(entity.getColor() != null && !entity.getColor().isBlank() ? entity.getColor() : "#93c5fd")
+            .lightText(Boolean.TRUE.equals(entity.getLightText()))
             .build();
     }
 }

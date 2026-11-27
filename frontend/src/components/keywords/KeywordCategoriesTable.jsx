@@ -1,5 +1,7 @@
-import { ArrowUpDown, Check, Pencil, Settings, Trash2, X } from 'lucide-react';
+import { ArrowUpDown, Check, Palette, Pencil, Settings, Shield, Trash2, X } from 'lucide-react';
+import { RESOURCE_TYPES, getResourceAccessSummary } from '../../rolesStore';
 import { parseKeywordsString } from './keywordUtils';
+import { getCategoryHighlightStyle } from './categoryColorPresets';
 
 export default function KeywordCategoriesTable({
   categories,
@@ -19,6 +21,8 @@ export default function KeywordCategoriesTable({
   openBulkMenuCatId,
   onToggleBulkMenu,
   onBulkUpdate,
+  onOpenAccess,
+  onOpenColor,
   onSelectKeyword,
   onConfirmDeleteCategory,
   onToggleSort,
@@ -61,6 +65,7 @@ export default function KeywordCategoriesTable({
               const isEditingName = editingCatId === cat.id;
               const isAddingWords = addingWordCatId === cat.id;
               const isBulkMenuOpen = openBulkMenuCatId === cat.id;
+              const accessSummary = getResourceAccessSummary(RESOURCE_TYPES.KEYWORD, cat.id);
 
               return (
                 <tr key={cat.id} className="hover:bg-blue-50/40">
@@ -89,7 +94,17 @@ export default function KeywordCategoriesTable({
                         </button>
                       </div>
                     ) : (
-                      <div className="text-base text-black">{cat.name}</div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => onOpenColor && onOpenColor(cat)}
+                          title="Kliknij, aby zmienić kolor podświetlenia tej kategorii"
+                          style={getCategoryHighlightStyle(cat.color, cat.lightText)}
+                          className="px-2.5 py-1 rounded-lg border font-extrabold text-sm cursor-pointer transition hover:opacity-90 text-left"
+                        >
+                          {cat.name}
+                        </button>
+                      </div>
                     )}
                   </td>
 
@@ -231,9 +246,54 @@ export default function KeywordCategoriesTable({
                               <span className="w-3 h-3 rounded-full bg-rose-900 border-2 border-rose-950 shrink-0" />
                               WYKLUCZ* (tylko z *)
                             </button>
+                            {onOpenAccess && (
+                              <div className="pt-1 mt-1 border-t border-blue-100">
+                                <button
+                                  type="button"
+                                  onClick={() => onOpenAccess(cat)}
+                                  className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs font-extrabold text-black hover:bg-amber-50 cursor-pointer"
+                                >
+                                  <Shield size={13} className="text-blue-700 shrink-0" />
+                                  Dostęp dla ról...
+                                </button>
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>
+
+                      {onOpenColor && (
+                        <button
+                          type="button"
+                          onClick={() => onOpenColor(cat)}
+                          title="Zmień kolor kategorii i kontrast tekstu"
+                          className="flex items-center gap-1 px-2.5 py-1.5 bg-white border border-blue-400 hover:bg-blue-50 text-black rounded-lg font-bold text-xs cursor-pointer"
+                        >
+                          <Palette size={14} />
+                          <span
+                            style={{ backgroundColor: cat.color || '#93c5fd' }}
+                            className="w-3 h-3 rounded-full border border-slate-500 shrink-0"
+                          />
+                        </button>
+                      )}
+
+                      {onOpenAccess && (
+                        <button
+                          type="button"
+                          onClick={() => onOpenAccess(cat)}
+                          title="Ustaw, które role mają dostęp do tej kategorii słów kluczowych"
+                          className={`flex items-center gap-1 px-3 py-1.5 border rounded-lg font-bold text-xs cursor-pointer transition ${
+                            accessSummary.isRestricted
+                              ? 'bg-amber-100 hover:bg-amber-200 border-amber-600 text-black'
+                              : 'bg-white border-blue-400 hover:bg-blue-50 text-black'
+                          }`}
+                        >
+                          <Shield size={14} />
+                          {accessSummary.isRestricted
+                            ? `Dostęp (${accessSummary.allowedCount}/${accessSummary.totalRoles})`
+                            : 'Dostęp'}
+                        </button>
+                      )}
 
                       <button
                         type="button"

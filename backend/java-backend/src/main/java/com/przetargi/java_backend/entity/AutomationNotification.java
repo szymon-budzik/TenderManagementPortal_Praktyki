@@ -41,6 +41,12 @@ public class AutomationNotification {
     @Column(name = "created_at")
     private OffsetDateTime createdAt;
 
+    @Column(name = "recipient_user_id")
+    private Long recipientUserId;
+
+    @Column(name = "notification_type", nullable = false, length = 40)
+    private String notificationType = "AUTOMATION";
+
     public AutomationNotification() {
     }
 
@@ -70,4 +76,10 @@ public class AutomationNotification {
 
     public OffsetDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(OffsetDateTime createdAt) { this.createdAt = createdAt; }
+
+    public Long getRecipientUserId() { return recipientUserId; }
+    public void setRecipientUserId(Long recipientUserId) { this.recipientUserId = recipientUserId; }
+
+    public String getNotificationType() { return notificationType; }
+    public void setNotificationType(String notificationType) { this.notificationType = notificationType; }
 }

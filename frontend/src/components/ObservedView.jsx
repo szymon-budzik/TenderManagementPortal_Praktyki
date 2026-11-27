@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { BookmarkCheck, RefreshCw } from 'lucide-react';
 import ConfirmModal from './ConfirmModal';
+import ShareModal from './ShareModal';
 import VersionDiffModal from './VersionDiffModal';
 import ObservedCheckResultBanner from './observed/ObservedCheckResultBanner';
 import ObservedReportBar from './observed/ObservedReportBar';
@@ -39,6 +40,7 @@ export default function ObservedView() {
   const [reportName, setReportName] = useState('');
   const [creatingReport, setCreatingReport] = useState(false);
   const [reportFeedback, setReportFeedback] = useState(null);
+  const [shareModalTenderIds, setShareModalTenderIds] = useState(null);
 
   const [expandedCards, setExpandedCards] = useState({});
   const [editingDeadlineId, setEditingDeadlineId] = useState(null);
@@ -61,8 +63,20 @@ export default function ObservedView() {
   }, []);
 
   useEffect(() => {
-    fetchObserved();
-  }, [fetchObserved]);
+    let cancelled = false;
+    Promise.all([getObservedTenders(), getKeywordCategories().catch(() => [])])
+      .then(([obsData, kwData]) => {
+        if (cancelled) return;
+        setItems(obsData);
+        setCategories(kwData);
+      })
+      .catch((err) => {
+        console.error('Błąd pobierania obserwowanych przetargów:', err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   usePolling(fetchObserved, 12000);
 
@@ -263,6 +277,22 @@ export default function ObservedView() {
     setExpandedCards((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
+  const handleOpenShareSelected = () => {
+    const idSet = new Set(selectedTenderIds);
+    if (selectedUpdateIds.length > 0) {
+      const updSet = new Set(selectedUpdateIds);
+      items.forEach((entry) => {
+        if ((entry.updates || []).some((u) => updSet.has(u.id))) {
+          idSet.add(entry.tender.id);
+        }
+      });
+    }
+    const ids = Array.from(idSet);
+    if (ids.length > 0) {
+      setShareModalTenderIds(ids);
+    }
+  };
+
   const totalUnreadGroups = items.filter(
     (entry) => entry.unreadUpdatesCount > 0 || entry.tender?.hasUnreadUpdate
   ).length;
@@ -281,6 +311,20 @@ export default function ObservedView() {
           onClose={closeConfirm}
         />
       )}
+
+      <ShareModal
+        isOpen={Boolean(shareModalTenderIds && shareModalTenderIds.length > 0)}
+        mode="TENDERS"
+        itemIds={shareModalTenderIds || []}
+        onClose={() => setShareModalTenderIds(null)}
+        onShared={(res) => {
+          setReportFeedback({
+            success: true,
+            text: res?.message || 'Przesłano wybrane przetargi do odbiorców z grupy.',
+          });
+          handleClearSelection();
+        }}
+      />
 
       {diffPayload && (
         <VersionDiffModal
@@ -339,6 +383,7 @@ export default function ObservedView() {
           onSelectAllVisible={handleSelectAllVisible}
           onClearSelection={handleClearSelection}
           onCreateReport={handleCreateReport}
+          onShareSelected={handleOpenShareSelected}
         />
       )}
 

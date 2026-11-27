@@ -1,11 +1,12 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
+import { Send, CheckCircle2, X } from 'lucide-react';
 import ConfirmModal from './ConfirmModal';
+import ShareModal from './ShareModal';
 import TendersFilterBar from './tenders/TendersFilterBar';
 import TendersTable from './tenders/TendersTable';
 import TenderDetailsModal from './tenders/TenderDetailsModal';
 import {
   PAGE_SIZE,
-  getTenderScoreDisplay,
   getTenderSource,
   parseCategoryScoreMap,
 } from './tenders/tenderUtils';
@@ -16,8 +17,6 @@ import { useSort } from '../hooks/useSort';
 import { usePagination } from '../hooks/usePagination';
 import { useConfirmDialog } from '../hooks/useConfirmDialog';
 import { useNowTick, usePolling } from '../hooks/usePolling';
-
-export { getTenderScoreDisplay };
 
 const INITIAL_FILTERS = {
   search: '',
@@ -38,6 +37,9 @@ export default function TendersView() {
   const [endpoints, setEndpoints] = useState([]);
   const [filters, setFilters] = useState(INITIAL_FILTERS);
   const [selectedTender, setSelectedTender] = useState(null);
+  const [selectedTenderIds, setSelectedTenderIds] = useState([]);
+  const [shareModalIds, setShareModalIds] = useState(null);
+  const [shareFeedback, setShareFeedback] = useState('');
 
   const { confirmDialog, openConfirm, closeConfirm } = useConfirmDialog();
   const nowMs = useNowTick(60000);
@@ -58,8 +60,25 @@ export default function TendersView() {
   }, []);
 
   useEffect(() => {
-    fetchTendersAndMeta();
-  }, [fetchTendersAndMeta]);
+    let cancelled = false;
+    Promise.all([
+      getTenders({ page: 0, size: 1000 }),
+      getKeywordCategories().catch(() => []),
+      getSearchSources().catch(() => []),
+    ])
+      .then(([tendersData, kwData, epData]) => {
+        if (cancelled) return;
+        setAllTenders(tendersData);
+        setCategories(kwData);
+        setEndpoints(epData);
+      })
+      .catch((err) => {
+        console.error('Błąd pobierania przetargów:', err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   usePolling(fetchTendersAndMeta, 12000);
 
@@ -179,6 +198,23 @@ export default function TendersView() {
     });
   };
 
+  const toggleSelectTender = (id) => {
+    setSelectedTenderIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
+  const toggleSelectPageTenders = () => {
+    const pageIds = paginatedTenders.map((t) => t.id);
+    const allOnPageSelected =
+      pageIds.length > 0 && pageIds.every((id) => selectedTenderIds.includes(id));
+    if (allOnPageSelected) {
+      setSelectedTenderIds((prev) => prev.filter((id) => !pageIds.includes(id)));
+    } else {
+      setSelectedTenderIds((prev) => Array.from(new Set([...prev, ...pageIds])));
+    }
+  };
+
   return (
     <div className="space-y-6 text-black">
       {confirmDialog && (
@@ -194,12 +230,60 @@ export default function TendersView() {
         />
       )}
 
-      <div>
-        <h2 className="text-2xl font-bold text-black">Lista Przetargów</h2>
-        <p className="text-xs font-semibold text-black mt-0.5">
-          Kliknij w dowolny nagłówek kolumny, aby posortować wyniki, lub w wybrany wiersz, aby otworzyć szczegóły i link do przetargu.
-        </p>
+      <ShareModal
+        isOpen={Boolean(shareModalIds && shareModalIds.length > 0)}
+        mode="TENDERS"
+        itemIds={shareModalIds || []}
+        onClose={() => setShareModalIds(null)}
+        onShared={(res) => {
+          setSelectedTenderIds([]);
+          setShareFeedback(res?.message || 'Przesłano wybrane przetargi.');
+        }}
+      />
+
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold text-black">Lista Przetargów</h2>
+          <p className="text-xs font-semibold text-black mt-0.5">
+            Kliknij w dowolny nagłówek kolumny, aby posortować wyniki, lub zaznacz przetargi i prześlij je osobom ze swojej grupy/podgrupy.
+          </p>
+        </div>
+
+        {selectedTenderIds.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShareModalIds(selectedTenderIds)}
+              className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-extrabold rounded-xl text-xs cursor-pointer shadow-xs"
+            >
+              <Send size={14} /> Prześlij zaznaczone ({selectedTenderIds.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedTenderIds([])}
+              className="px-3 py-2 bg-white border border-blue-300 hover:bg-blue-50 text-black font-bold rounded-xl text-xs cursor-pointer"
+            >
+              Odznacz
+            </button>
+          </div>
+        )}
       </div>
+
+      {shareFeedback && (
+        <div className="p-3 bg-green-50 border border-green-700 rounded-xl text-xs font-extrabold text-black flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 size={15} className="text-green-700 shrink-0" />
+            <span>{shareFeedback}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShareFeedback('')}
+            className="p-0.5 rounded hover:bg-green-100 cursor-pointer"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
 
       <TendersFilterBar
         filters={filters}
@@ -215,6 +299,13 @@ export default function TendersView() {
         nowMs={nowMs}
         currentPage={currentPage}
         totalPages={totalPages}
+        selectedTenderIds={selectedTenderIds}
+        onToggleSelectTender={toggleSelectTender}
+        onToggleSelectPage={toggleSelectPageTenders}
+        onShareSingleTender={(e, t) => {
+          e.stopPropagation();
+          setShareModalIds([t.id]);
+        }}
         onPageChange={setPage}
         onToggleSort={toggleSort}
         onSelectTender={setSelectedTender}

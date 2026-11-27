@@ -8,6 +8,8 @@ export const EMPTY_PROFILE_FORM = {
   selectedEndpointIds: [],
   selectedCategoryIds: [],
   categoryModes: {},
+  useCategoryQuery: false,
+  categoryQuery: '',
   recipientEmails: '',
   smtpAccountId: '',
 };

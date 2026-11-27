@@ -8,9 +8,13 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Pattern;
 
 @Service
 public class KeywordCategoryService {
+
+    public static final String DEFAULT_COLOR = "#93c5fd";
+    private static final Pattern HEX_COLOR_PATTERN = Pattern.compile("^#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})$");
 
     private final KeywordCategoryRepository repository;
 
@@ -34,6 +38,8 @@ public class KeywordCategoryService {
         entity.setKeywords(normalizeKeywordsWithWeights(dto.getKeywords()));
         entity.setScore(50);
         entity.setIsExcluded(false);
+        entity.setColor(normalizeColor(dto.getColor(), DEFAULT_COLOR));
+        entity.setLightText(Boolean.TRUE.equals(dto.getLightText()));
         return KeywordCategoryDto.fromEntity(repository.save(entity));
     }
 
@@ -46,7 +52,28 @@ public class KeywordCategoryService {
         entity.setKeywords(normalizeKeywordsWithWeights(dto.getKeywords()));
         entity.setScore(50);
         entity.setIsExcluded(false);
+        if (dto.getColor() != null && !dto.getColor().isBlank()) {
+            entity.setColor(normalizeColor(dto.getColor(), DEFAULT_COLOR));
+        } else if (entity.getColor() == null || entity.getColor().isBlank()) {
+            entity.setColor(DEFAULT_COLOR);
+        }
+        if (dto.getLightText() != null) {
+            entity.setLightText(dto.getLightText());
+        } else if (entity.getLightText() == null) {
+            entity.setLightText(false);
+        }
         return KeywordCategoryDto.fromEntity(repository.save(entity));
+    }
+
+    private String normalizeColor(String raw, String fallback) {
+        if (raw == null || raw.isBlank()) {
+            return fallback;
+        }
+        String trimmed = raw.trim();
+        if (!HEX_COLOR_PATTERN.matcher(trimmed).matches()) {
+            throw new IllegalArgumentException("Nieprawidłowy format koloru (oczekiwano hex, np. #93c5fd).");
+        }
+        return trimmed.toLowerCase();
     }
 
     @Transactional

@@ -1,4 +1,4 @@
-import { FileSpreadsheet, X } from 'lucide-react';
+import { FileSpreadsheet, Send, X } from 'lucide-react';
 
 export default function ObservedReportBar({
   selectedTenderCount,
@@ -12,6 +12,7 @@ export default function ObservedReportBar({
   onSelectAllVisible,
   onClearSelection,
   onCreateReport,
+  onShareSelected,
 }) {
   const totalSelectedCount = selectedTenderCount + selectedUpdateCount;
 
@@ -75,6 +76,17 @@ export default function ObservedReportBar({
             ? 'Tworzenie raportu...'
             : `Utwórz raport w zakładce Raporty (${totalSelectedCount})`}
         </button>
+        {onShareSelected && (
+          <button
+            type="button"
+            disabled={creatingReport || totalSelectedCount === 0}
+            onClick={onShareSelected}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white font-extrabold rounded-lg text-xs cursor-pointer transition"
+          >
+            <Send size={14} />
+            Prześlij w grupie ({totalSelectedCount})
+          </button>
+        )}
       </div>
 
       {reportFeedback && (

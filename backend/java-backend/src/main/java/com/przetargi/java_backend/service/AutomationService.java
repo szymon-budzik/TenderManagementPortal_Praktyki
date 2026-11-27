@@ -4,8 +4,12 @@ import com.przetargi.java_backend.dto.AutomationProfileDto;
 import com.przetargi.java_backend.dto.AutomationProfileRequest;
 import com.przetargi.java_backend.dto.FetchRunDto;
 import com.przetargi.java_backend.entity.AutomationProfile;
+import com.przetargi.java_backend.entity.FetchRun;
+import com.przetargi.java_backend.entity.User;
 import com.przetargi.java_backend.repository.AutomationProfileRepository;
 import com.przetargi.java_backend.repository.FetchRunRepository;
+import com.przetargi.java_backend.repository.KeywordCategoryRepository;
+import com.przetargi.java_backend.repository.UserRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -19,19 +23,28 @@ public class AutomationService {
     private final TenderExecutionService executionService;
     private final ReportExportService reportExportService;
     private final ReportEmailService reportEmailService;
+    private final UserRepository userRepository;
+    private final KeywordCategoryRepository keywordCategoryRepository;
+    private final CategoryQueryService categoryQueryService;
 
     public AutomationService(
             AutomationProfileRepository profileRepository,
             FetchRunRepository fetchRunRepository,
             TenderExecutionService executionService,
             ReportExportService reportExportService,
-            ReportEmailService reportEmailService
+            ReportEmailService reportEmailService,
+            UserRepository userRepository,
+            KeywordCategoryRepository keywordCategoryRepository,
+            CategoryQueryService categoryQueryService
     ) {
         this.profileRepository = profileRepository;
         this.fetchRunRepository = fetchRunRepository;
         this.executionService = executionService;
         this.reportExportService = reportExportService;
         this.reportEmailService = reportEmailService;
+        this.userRepository = userRepository;
+        this.keywordCategoryRepository = keywordCategoryRepository;
+        this.categoryQueryService = categoryQueryService;
     }
 
     @Transactional(readOnly = true)
@@ -60,6 +73,13 @@ public class AutomationService {
         p.setCategoryIds(incoming.categoryIds() != null ? incoming.categoryIds() : "");
         p.setRecipientEmails(incoming.recipientEmails() != null ? incoming.recipientEmails().trim() : "");
         p.setNotificationsEnabled(incoming.notificationsEnabled() != null ? incoming.notificationsEnabled() : true);
+        boolean useQuery = Boolean.TRUE.equals(incoming.useCategoryQuery());
+        String queryText = incoming.categoryQuery() != null ? incoming.categoryQuery().trim() : "";
+        if (useQuery) {
+            categoryQueryService.parse(queryText, keywordCategoryRepository.findAll());
+        }
+        p.setUseCategoryQuery(useQuery);
+        p.setCategoryQuery(queryText.isBlank() ? null : queryText);
 
         return AutomationProfileDto.fromEntity(profileRepository.save(p));
     }
@@ -104,6 +124,19 @@ public class AutomationService {
         if (incoming.notificationsEnabled() != null) {
             p.setNotificationsEnabled(incoming.notificationsEnabled());
         }
+        if (incoming.useCategoryQuery() != null || incoming.categoryQuery() != null) {
+            boolean useQuery = incoming.useCategoryQuery() != null
+                    ? incoming.useCategoryQuery()
+                    : Boolean.TRUE.equals(p.getUseCategoryQuery());
+            String queryText = incoming.categoryQuery() != null
+                    ? incoming.categoryQuery().trim()
+                    : (p.getCategoryQuery() != null ? p.getCategoryQuery() : "");
+            if (useQuery) {
+                categoryQueryService.parse(queryText, keywordCategoryRepository.findAll());
+            }
+            p.setUseCategoryQuery(useQuery);
+            p.setCategoryQuery(queryText.isBlank() ? null : queryText);
+        }
 
         return AutomationProfileDto.fromEntity(profileRepository.save(p));
     }
@@ -120,8 +153,16 @@ public class AutomationService {
     }
 
     @Transactional(readOnly = true)
-    public List<FetchRunDto> getRuns() {
-        return fetchRunRepository.findAllByOrderByCreatedAtDesc().stream()
+    public List<FetchRunDto> getRuns(String username) {
+        Long userId = (username == null || username.isBlank())
+                ? null
+                : userRepository.findByUsername(username).map(User::getId).orElse(null);
+
+        List<FetchRun> runs = userId != null
+                ? fetchRunRepository.findByTargetUserIdIsNullOrTargetUserIdOrderByCreatedAtDesc(userId)
+                : fetchRunRepository.findByTargetUserIdIsNullOrderByCreatedAtDesc();
+
+        return runs.stream()
                 .map(FetchRunDto::fromEntity)
                 .toList();
     }

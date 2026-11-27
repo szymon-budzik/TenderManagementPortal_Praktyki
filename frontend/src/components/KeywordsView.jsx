@@ -1,9 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import { KeyRound } from 'lucide-react';
 import ConfirmModal from './ConfirmModal';
+import ResourceAccessModal from './ResourceAccessModal';
 import KeywordCategoryForm from './keywords/KeywordCategoryForm';
 import KeywordConfigPanel from './keywords/KeywordConfigPanel';
 import KeywordCategoriesTable from './keywords/KeywordCategoriesTable';
+import KeywordColorModal from './keywords/KeywordColorModal';
+import { DEFAULT_CATEGORY_COLOR } from './keywords/categoryColorPresets';
 import {
   hasWildcardSuffix,
   parseKeywordsString,
@@ -15,15 +18,16 @@ import {
   getKeywordCategories,
   updateKeywordCategory,
 } from '../services/keywordsApi';
+import { RESOURCE_TYPES, removeResourceAccess } from '../rolesStore';
 import { useSort } from '../hooks/useSort';
 import { useConfirmDialog } from '../hooks/useConfirmDialog';
-
-export { parseKeywordsString, serializeKeywordsList };
 
 export default function KeywordsView() {
   const [categories, setCategories] = useState([]);
   const [name, setName] = useState('');
   const [keywordsInput, setKeywordsInput] = useState('');
+  const [color, setColor] = useState(DEFAULT_CATEGORY_COLOR);
+  const [lightText, setLightText] = useState(false);
 
   const [editingCatId, setEditingCatId] = useState(null);
   const [editCatName, setEditCatName] = useState('');
@@ -32,6 +36,10 @@ export default function KeywordsView() {
 
   const [selectedKeyword, setSelectedKeyword] = useState(null);
   const [openBulkMenuCatId, setOpenBulkMenuCatId] = useState(null);
+  const [accessModalCategory, setAccessModalCategory] = useState(null);
+  const [colorModalCategory, setColorModalCategory] = useState(null);
+  const [savingColor, setSavingColor] = useState(false);
+  const [, setAccessTick] = useState(0);
 
   const { confirmDialog, openConfirm, closeConfirm } = useConfirmDialog();
   const { toggleSort, sortedItems: sortedCategories } = useSort(categories, {
@@ -49,8 +57,18 @@ export default function KeywordsView() {
   }, []);
 
   useEffect(() => {
-    fetchCategories();
-  }, [fetchCategories]);
+    let cancelled = false;
+    getKeywordCategories()
+      .then((data) => {
+        if (!cancelled) setCategories(data);
+      })
+      .catch((err) => {
+        console.error('Błąd pobierania kategorii słów kluczowych:', err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const handleClickOutside = (e) => {
@@ -79,12 +97,36 @@ export default function KeywordsView() {
         keywords: words,
         score: 50,
         isExcluded: false,
+        color,
+        lightText,
       });
       setName('');
       setKeywordsInput('');
+      setColor(DEFAULT_CATEGORY_COLOR);
+      setLightText(false);
       fetchCategories();
     } catch (err) {
       console.error('Błąd tworzenia kategorii:', err);
+    }
+  };
+
+  const handleSaveCategoryColor = async (cat, nextColor, nextLightText) => {
+    setSavingColor(true);
+    try {
+      await updateKeywordCategory(cat.id, {
+        name: cat.name,
+        keywords: cat.keywords,
+        score: 50,
+        isExcluded: false,
+        color: nextColor,
+        lightText: nextLightText,
+      });
+      setColorModalCategory(null);
+      fetchCategories();
+    } catch (err) {
+      console.error('Błąd zapisu koloru kategorii:', err);
+    } finally {
+      setSavingColor(false);
     }
   };
 
@@ -257,6 +299,7 @@ export default function KeywordsView() {
       message: `Czy na pewno chcesz usunąć kategorię "${cat.name}" wraz ze wszystkimi jej słowami?`,
       onConfirm: async () => {
         await deleteKeywordCategory(cat.id);
+        removeResourceAccess(RESOURCE_TYPES.KEYWORD, cat.id);
         if (selectedKeyword?.catId === cat.id) setSelectedKeyword(null);
         fetchCategories();
       },
@@ -278,12 +321,30 @@ export default function KeywordsView() {
         />
       )}
 
+      <ResourceAccessModal
+        isOpen={Boolean(accessModalCategory)}
+        resourceType={RESOURCE_TYPES.KEYWORD}
+        resourceTypeLabel="Kategoria słów kluczowych"
+        resourceId={accessModalCategory?.id}
+        resourceName={accessModalCategory?.name}
+        usageHint="Wybierz, które role mogą korzystać z tej kategorii słów kluczowych w Wyszukiwarce oraz w profilach Automatyzacji."
+        onClose={() => setAccessModalCategory(null)}
+        onSaved={() => setAccessTick((t) => t + 1)}
+      />
+
+      <KeywordColorModal
+        category={colorModalCategory}
+        saving={savingColor}
+        onSave={handleSaveCategoryColor}
+        onClose={() => setColorModalCategory(null)}
+      />
+
       <div className="flex items-center gap-2">
         <KeyRound size={24} className="text-blue-600" />
         <div>
           <h2 className="text-2xl font-bold text-black">Kategorie i Wagi Słów Kluczowych</h2>
           <p className="text-xs font-semibold text-black">
-            Wildcard (*) można włączyć wyłącznie dla słów zakończonych gwiazdką (np. dostaw*). Połączenie wykluczenia z wildcardem oznaczane jest na bordowo jako WYKLUCZ*.
+            Wildcard (*) można włączyć wyłącznie dla słów zakończonych gwiazdką (np. dostaw*). Kolor kategorii jest używany w podświetlaniu słów kluczowych w szczegółach przetargu.
           </p>
         </div>
       </div>
@@ -293,6 +354,10 @@ export default function KeywordsView() {
         onNameChange={setName}
         keywordsInput={keywordsInput}
         onKeywordsInputChange={setKeywordsInput}
+        color={color}
+        onColorChange={setColor}
+        lightText={lightText}
+        onLightTextChange={setLightText}
         onSubmit={handleCreateCategory}
       />
 
@@ -335,6 +400,11 @@ export default function KeywordsView() {
           setOpenBulkMenuCatId((prev) => (prev === catId ? null : catId))
         }
         onBulkUpdate={handleBulkUpdateCategoryKeywords}
+        onOpenAccess={(cat) => {
+          setOpenBulkMenuCatId(null);
+          setAccessModalCategory(cat);
+        }}
+        onOpenColor={(cat) => setColorModalCategory(cat)}
         onSelectKeyword={handleSelectKeyword}
         onConfirmDeleteCategory={confirmDeleteCategory}
         onToggleSort={toggleSort}

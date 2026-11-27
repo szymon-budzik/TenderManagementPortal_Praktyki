@@ -6,10 +6,13 @@ import AutomationView from './components/AutomationView';
 import ReportsView from './components/ReportsView';
 import TendersView from './components/TendersView';
 import ObservedView from './components/ObservedView';
+import SharedInboxView from './components/SharedInboxView';
 import AnalyticsView from './components/AnalyticsView';
 import EndpointsView from './components/EndpointsView';
 import KeywordsView from './components/KeywordsView';
 import SmtpView from './components/SmtpView';
+import AiConfigView from './components/AiConfigView';
+import GroupsView from './components/GroupsView';
 import UsersView from './components/UsersView';
 import NotificationsBell from './components/NotificationsBell';
 import ThemeToggleButton from './components/ThemeToggleButton';
@@ -21,11 +24,14 @@ import {
   FileSpreadsheet,
   FileText,
   BookmarkCheck,
+  Inbox,
   BarChart3,
   Users,
   Globe,
   KeyRound,
   Mail,
+  Bot,
+  Building2,
   LogOut,
   Database,
 } from 'lucide-react';
@@ -48,6 +54,7 @@ export default function App() {
   });
 
   const [observedBadge, setObservedBadge] = useState({ observedCount: 0, unreadCount: 0 });
+  const [sharedBadge, setSharedBadge] = useState({ totalCount: 0, unreadCount: 0 });
   const [backupModalOpen, setBackupModalOpen] = useState(false);
   const [viewRefreshKey, setViewRefreshKey] = useState(0);
   const [, setTick] = useState(0);
@@ -78,25 +85,40 @@ export default function App() {
     }
   };
 
+  const fetchSharedBadge = async () => {
+    if (!localStorage.getItem('token')) return;
+    try {
+      const res = await api.get('/shares/tenders/badge');
+      setSharedBadge({
+        totalCount: res.data?.totalCount || 0,
+        unreadCount: res.data?.unreadCount || 0,
+      });
+    } catch {
+      // Ciche pominięcie
+    }
+  };
+
   useEffect(() => {
     const handleUpdate = () => setTick((t) => t + 1);
     const handleForceLogout = () => setAuth(null);
     const handleObservedUpdated = () => fetchObservedBadge();
+    const handleSharedUpdated = () => fetchSharedBadge();
 
     window.addEventListener('rolesUpdated', handleUpdate);
     window.addEventListener('authForceLogout', handleForceLogout);
     window.addEventListener('observedUpdated', handleObservedUpdated);
+    window.addEventListener('sharedUpdated', handleSharedUpdated);
     return () => {
       window.removeEventListener('rolesUpdated', handleUpdate);
       window.removeEventListener('authForceLogout', handleForceLogout);
       window.removeEventListener('observedUpdated', handleObservedUpdated);
+      window.removeEventListener('sharedUpdated', handleSharedUpdated);
     };
   }, []);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
     if (!token) {
-      setCheckingSession(false);
       return;
     }
     api
@@ -104,6 +126,7 @@ export default function App() {
       .then(() => {
         setCheckingSession(false);
         fetchObservedBadge();
+        fetchSharedBadge();
       })
       .catch(() => {
         handleLogout();
@@ -113,9 +136,37 @@ export default function App() {
 
   useEffect(() => {
     if (!auth) return;
-    fetchObservedBadge();
-    const interval = setInterval(fetchObservedBadge, 10000);
-    return () => clearInterval(interval);
+    let cancelled = false;
+    const refreshBadges = async () => {
+      if (!localStorage.getItem('token')) return;
+      try {
+        const [obsRes, sharedRes] = await Promise.all([
+          api.get('/tenders/observed/badge').catch(() => null),
+          api.get('/shares/tenders/badge').catch(() => null),
+        ]);
+        if (cancelled) return;
+        if (obsRes) {
+          setObservedBadge({
+            observedCount: obsRes.data?.observedCount || 0,
+            unreadCount: obsRes.data?.unreadCount || 0,
+          });
+        }
+        if (sharedRes) {
+          setSharedBadge({
+            totalCount: sharedRes.data?.totalCount || 0,
+            unreadCount: sharedRes.data?.unreadCount || 0,
+          });
+        }
+      } catch {
+        // Ciche pominięcie
+      }
+    };
+    refreshBadges();
+    const interval = setInterval(refreshBadges, 10000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [auth]);
 
   if (checkingSession) {
@@ -135,6 +186,7 @@ export default function App() {
     { id: 'reports', label: 'Raporty', icon: FileSpreadsheet },
     { id: 'tenders', label: 'Przetargi', icon: FileText },
     { id: 'observed', label: 'Obserwowane', icon: BookmarkCheck },
+    { id: 'shared', label: 'Przesłane', icon: Inbox },
     { id: 'analytics', label: 'Statystyki', icon: BarChart3 },
   ];
 
@@ -142,6 +194,8 @@ export default function App() {
     { id: 'endpoints', label: 'Endpointy', icon: Globe, perm: 'ENDPOINTS' },
     { id: 'keywords', label: 'Keywordsy', icon: KeyRound, perm: 'KEYWORDS' },
     { id: 'smtp', label: 'SMTP', icon: Mail, perm: 'SMTP' },
+    { id: 'ai', label: 'Integracje AI', icon: Bot, perm: 'ai' },
+    { id: 'groups', label: 'Grupy', icon: Building2, perm: 'groups' },
     { id: 'users', label: 'Użytkownicy', icon: Users, perm: 'USERS' },
   ].filter((item) => permissions.includes(item.perm));
 
@@ -169,7 +223,7 @@ export default function App() {
               </p>
               <div className="flex items-center gap-1.5 shrink-0">
                 <ThemeToggleButton isDark={isDark} onToggle={toggleTheme} />
-                <NotificationsBell />
+                <NotificationsBell onNavigateTab={handleSelectTab} />
               </div>
             </div>
           </div>
@@ -179,6 +233,7 @@ export default function App() {
               const Icon = item.icon;
               const isActive = activeTab === item.id;
               const isObservedTab = item.id === 'observed';
+              const isSharedTab = item.id === 'shared';
 
               return (
                 <button
@@ -216,6 +271,30 @@ export default function App() {
                         }`}
                       >
                         {observedBadge.observedCount}
+                      </span>
+                    )}
+
+                  {isSharedTab && sharedBadge.unreadCount > 0 && (
+                    <span
+                      title={`Nowe przesłane przetargi: ${sharedBadge.unreadCount}`}
+                      className="px-2 py-0.5 rounded-full text-[11px] font-extrabold bg-red-600 text-white shrink-0"
+                    >
+                      {sharedBadge.unreadCount}
+                    </span>
+                  )}
+
+                  {isSharedTab &&
+                    sharedBadge.unreadCount === 0 &&
+                    sharedBadge.totalCount > 0 && (
+                      <span
+                        title={`Przesłane przetargi: ${sharedBadge.totalCount}`}
+                        className={`px-2 py-0.5 rounded-full text-[11px] font-extrabold shrink-0 ${
+                          isActive
+                            ? 'bg-white/25 text-white'
+                            : 'bg-blue-100 text-blue-800'
+                        }`}
+                      >
+                        {sharedBadge.totalCount}
                       </span>
                     )}
                 </button>
@@ -276,10 +355,13 @@ export default function App() {
         {activeTab === 'reports' && <ReportsView />}
         {activeTab === 'tenders' && <TendersView />}
         {activeTab === 'observed' && <ObservedView />}
+        {activeTab === 'shared' && <SharedInboxView />}
         {activeTab === 'analytics' && <AnalyticsView />}
         {activeTab === 'endpoints' && permissions.includes('ENDPOINTS') && <EndpointsView />}
         {activeTab === 'keywords' && permissions.includes('KEYWORDS') && <KeywordsView />}
         {activeTab === 'smtp' && permissions.includes('SMTP') && <SmtpView />}
+        {activeTab === 'ai' && permissions.includes('ai') && <AiConfigView />}
+        {activeTab === 'groups' && permissions.includes('groups') && <GroupsView />}
         {activeTab === 'users' && permissions.includes('USERS') && <UsersView />}
       </main>
     </div>

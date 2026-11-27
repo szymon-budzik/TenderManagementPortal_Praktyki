@@ -62,7 +62,9 @@ public class BackupService {
                         c.getName(),
                         c.getKeywords(),
                         c.getScore(),
-                        c.getIsExcluded()
+                        c.getIsExcluded(),
+                        c.getColor(),
+                        c.getLightText()
                 ))
                 .toList();
 
@@ -79,7 +81,9 @@ public class BackupService {
                         p.getEndpointIds(),
                         p.getCategoryIds(),
                         p.getRecipientEmails(),
-                        p.getNotificationsEnabled()
+                        p.getNotificationsEnabled(),
+                        p.getCategoryQuery(),
+                        p.getUseCategoryQuery()
                 ))
                 .toList();
 
@@ -192,6 +196,10 @@ public class BackupService {
                 entity.setKeywords(dto.keywords() != null ? dto.keywords() : "");
                 entity.setScore(dto.score() != null ? dto.score() : 50);
                 entity.setIsExcluded(Boolean.TRUE.equals(dto.isExcluded()));
+                entity.setColor(dto.color() != null && !dto.color().isBlank()
+                        ? dto.color().trim().toLowerCase()
+                        : KeywordCategoryService.DEFAULT_COLOR);
+                entity.setLightText(Boolean.TRUE.equals(dto.lightText()));
 
                 KeywordCategory saved = keywordCategoryRepository.save(entity);
                 existingCategoriesByName.put(key, saved);
@@ -233,6 +241,8 @@ public class BackupService {
                 entity.setCategoryIds(remapIdList(dto.categoryIds(), categoryIdMap));
                 entity.setRecipientEmails(dto.recipientEmails() != null ? dto.recipientEmails().trim() : "");
                 entity.setNotificationsEnabled(dto.notificationsEnabled() != null ? dto.notificationsEnabled() : true);
+                entity.setCategoryQuery(dto.categoryQuery() != null && !dto.categoryQuery().isBlank() ? dto.categoryQuery().trim() : null);
+                entity.setUseCategoryQuery(Boolean.TRUE.equals(dto.useCategoryQuery()));
 
                 Long smtpId = dto.smtpAccountId();
                 if (smtpId != null && smtpAccountRepository.existsById(smtpId)) {
@@ -307,7 +317,9 @@ public class BackupService {
             String name,
             String keywords,
             Integer score,
-            Boolean isExcluded
+            Boolean isExcluded,
+            String color,
+            Boolean lightText
     ) {}
 
     public record AutomationProfileBackupDto(
@@ -322,7 +334,9 @@ public class BackupService {
             String endpointIds,
             String categoryIds,
             String recipientEmails,
-            Boolean notificationsEnabled
+            Boolean notificationsEnabled,
+            String categoryQuery,
+            Boolean useCategoryQuery
     ) {}
 
     public record ConfigBackupDto(

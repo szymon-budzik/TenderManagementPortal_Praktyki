@@ -85,6 +85,7 @@ export default function ReportsRunsTable({
               const upperType = (r.sourceType || '').toUpperCase();
               const isCron = upperType.startsWith('CRON');
               const isObserved = upperType.startsWith('OBSERWOWANE');
+              const isShared = upperType.startsWith('PRZESŁANE') || Boolean(r.sharedByUsername);
               const bracketMatch = r.sourceType?.match(/\[(.+)\]$/);
               const subLabel = bracketMatch ? bracketMatch[1].trim() : null;
 
@@ -134,6 +135,20 @@ export default function ReportsRunsTable({
                             className="text-xs font-bold text-slate-700 leading-tight max-w-[160px] truncate"
                           >
                             {subLabel}
+                          </span>
+                        )}
+                      </div>
+                    ) : isShared ? (
+                      <div className="inline-flex flex-col items-start gap-1">
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-[11px] font-extrabold border-2 bg-purple-200 border-purple-800 text-black whitespace-nowrap">
+                          PRZESŁANE
+                        </span>
+                        {(r.sharedByUsername || subLabel) && (
+                          <span
+                            title={r.sharedNote ? `Notatka: ${r.sharedNote}` : (subLabel || `od: ${r.sharedByUsername}`)}
+                            className="text-xs font-bold text-slate-700 leading-tight max-w-[180px] truncate"
+                          >
+                            {subLabel || `od: ${r.sharedByUsername}`}
                           </span>
                         )}
                       </div>

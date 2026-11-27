@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../api';
 import {
   Bell,
@@ -7,9 +7,11 @@ import {
   X,
   ChevronDown,
   ChevronUp,
+  Send,
+  FileSpreadsheet,
 } from 'lucide-react';
 
-export default function NotificationsBell() {
+export default function NotificationsBell({ onNavigateTab }) {
   const [notifications, setNotifications] = useState([]);
   const [open, setOpen] = useState(false);
   const [expandedId, setExpandedId] = useState(null);
@@ -17,7 +19,7 @@ export default function NotificationsBell() {
   const [freshUnreadIds, setFreshUnreadIds] = useState(() => new Set());
   const wrapperRef = useRef(null);
 
-  const fetchNotifications = async () => {
+  const fetchNotifications = useCallback(async () => {
     try {
       const res = await api.get('/automation/notifications');
       const data = res.data || [];
@@ -26,17 +28,29 @@ export default function NotificationsBell() {
     } catch {
       return null;
     }
-  };
+  }, []);
 
   useEffect(() => {
-    fetchNotifications();
-    const interval = setInterval(fetchNotifications, 5000);
+    let cancelled = false;
+    const loadQuietly = async () => {
+      try {
+        const res = await api.get('/automation/notifications');
+        if (!cancelled) {
+          setNotifications(res.data || []);
+        }
+      } catch {
+        // Ignoruj
+      }
+    };
+    loadQuietly();
+    const interval = setInterval(loadQuietly, 5000);
     const handleImmediateRefresh = () => {
-      fetchNotifications();
+      loadQuietly();
     };
     window.addEventListener('notificationsUpdated', handleImmediateRefresh);
 
     return () => {
+      cancelled = true;
       clearInterval(interval);
       window.removeEventListener('notificationsUpdated', handleImmediateRefresh);
     };
@@ -45,7 +59,7 @@ export default function NotificationsBell() {
   const unreadCount = notifications.filter((n) => !n.isRead).length;
   const showRedDot = !open && unreadCount > 0;
 
-  const closePanel = async () => {
+  const closePanel = useCallback(async () => {
     setOpen(false);
     setExpandedId(null);
     setFreshUnreadIds(new Set());
@@ -59,7 +73,7 @@ export default function NotificationsBell() {
         // Ignoruj
       }
     }
-  };
+  }, [notifications]);
 
   useEffect(() => {
     const handleClickOutside = (e) => {
@@ -69,7 +83,7 @@ export default function NotificationsBell() {
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [open, notifications]);
+  }, [open, closePanel]);
 
   const handleToggleBell = async () => {
     if (open) {
@@ -140,7 +154,7 @@ export default function NotificationsBell() {
       <button
         type="button"
         onClick={handleToggleBell}
-        title="Powiadomienia automatyzacji"
+        title="Powiadomienia"
         className={`relative w-8 h-8 rounded-full border-2 flex items-center justify-center transition cursor-pointer shrink-0 ${
           open
             ? 'bg-blue-600 border-blue-800 text-white'
@@ -166,7 +180,7 @@ export default function NotificationsBell() {
             <div className="flex items-center gap-2">
               <Bell size={16} />
               <span className="font-extrabold text-sm">
-                Powiadomienia automatyzacji
+                Powiadomienia
               </span>
             </div>
             <button
@@ -182,12 +196,15 @@ export default function NotificationsBell() {
           <div className="max-h-[70vh] overflow-y-auto divide-y divide-blue-100">
             {notifications.length === 0 ? (
               <div className="p-6 text-center text-xs font-semibold text-slate-600">
-                Brak powiadomień z automatyzacji.
+                Brak powiadomień.
               </div>
             ) : (
               notifications.map((n) => {
                 const isExpanded = expandedId === n.id;
                 const isNewInList = !n.isRead || freshUnreadIds.has(n.id);
+                const notifType = n.notificationType || 'AUTOMATION';
+                const isSharedTender = notifType === 'SHARED_TENDER';
+                const isSharedReport = notifType === 'SHARED_REPORT';
 
                 return (
                   <div
@@ -200,7 +217,17 @@ export default function NotificationsBell() {
                     }`}
                   >
                     <div className="flex items-start gap-2.5">
-                      {n.success ? (
+                      {isSharedTender ? (
+                        <Send
+                          size={18}
+                          className="text-purple-700 shrink-0 mt-0.5"
+                        />
+                      ) : isSharedReport ? (
+                        <FileSpreadsheet
+                          size={18}
+                          className="text-blue-600 shrink-0 mt-0.5"
+                        />
+                      ) : n.success ? (
                         <CheckCircle2
                           size={18}
                           className="text-green-700 shrink-0 mt-0.5"
@@ -229,6 +256,20 @@ export default function NotificationsBell() {
                           <div className="text-xs font-medium text-black/85 mt-1 leading-snug">
                             {n.summary}
                           </div>
+                        )}
+
+                        {onNavigateTab && (isSharedTender || isSharedReport) && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              closePanel();
+                              onNavigateTab(isSharedTender ? 'shared' : 'reports');
+                            }}
+                            className="mt-1.5 inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-blue-100 hover:bg-blue-200 border border-blue-400 text-[11px] font-extrabold text-blue-900 cursor-pointer"
+                          >
+                            {isSharedTender ? 'Otwórz zakładkę Przesłane →' : 'Otwórz zakładkę Raporty →'}
+                          </button>
                         )}
 
                         <div className="flex items-center justify-between mt-1.5 text-[11px] font-semibold text-slate-600">

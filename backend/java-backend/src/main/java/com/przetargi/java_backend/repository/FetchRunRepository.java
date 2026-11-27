@@ -7,4 +7,6 @@ import java.util.List;
 
 public interface FetchRunRepository extends JpaRepository<FetchRun, Long> {
     List<FetchRun> findAllByOrderByCreatedAtDesc();
+    List<FetchRun> findByTargetUserIdIsNullOrderByCreatedAtDesc();
+    List<FetchRun> findByTargetUserIdIsNullOrTargetUserIdOrderByCreatedAtDesc(Long targetUserId);
 }

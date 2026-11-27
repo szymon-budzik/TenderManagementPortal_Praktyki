@@ -1,12 +1,16 @@
 import { useState, useEffect, useMemo } from 'react';
 import api from '../api';
 import ConfirmModal from './ConfirmModal';
-import { Mail, Save, Trash2, Pencil, Plus, ArrowUpDown } from 'lucide-react';
+import ResourceAccessModal from './ResourceAccessModal';
+import { RESOURCE_TYPES, getResourceAccessSummary, removeResourceAccess } from '../rolesStore';
+import { Mail, Save, Trash2, Pencil, Plus, ArrowUpDown, Shield } from 'lucide-react';
 
 export default function SmtpView() {
   const [smtpAccounts, setSmtpAccounts] = useState([]);
   const [editingSmtpId, setEditingSmtpId] = useState(null);
   const [confirmDialog, setConfirmDialog] = useState(null);
+  const [accessModalSmtp, setAccessModalSmtp] = useState(null);
+  const [, setAccessTick] = useState(0);
   const [sortConfig, setSortConfig] = useState({ key: 'id', dir: 'asc' });
 
   const [smtpForm, setSmtpForm] = useState({
@@ -27,7 +31,18 @@ export default function SmtpView() {
   };
 
   useEffect(() => {
-    fetchSmtpAccounts();
+    let cancelled = false;
+    api
+      .get('/automation/smtp-accounts')
+      .then((res) => {
+        if (!cancelled) setSmtpAccounts(res.data || []);
+      })
+      .catch((err) => {
+        console.error('Błąd pobierania kont SMTP:', err);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const resetSmtpForm = () => {
@@ -90,6 +105,7 @@ export default function SmtpView() {
       onConfirm: async () => {
         try {
           await api.delete(`/automation/smtp-accounts/${acc.id}`);
+          removeResourceAccess(RESOURCE_TYPES.SMTP, acc.id);
           if (editingSmtpId === acc.id) resetSmtpForm();
           fetchSmtpAccounts();
         } finally {
@@ -135,6 +151,17 @@ export default function SmtpView() {
           onClose={() => setConfirmDialog(null)}
         />
       )}
+
+      <ResourceAccessModal
+        isOpen={Boolean(accessModalSmtp)}
+        resourceType={RESOURCE_TYPES.SMTP}
+        resourceTypeLabel="Konto SMTP"
+        resourceId={accessModalSmtp?.id}
+        resourceName={accessModalSmtp?.name}
+        usageHint="Wybierz, które role mogą korzystać z tego konta SMTP w profilach Automatyzacji oraz podczas ręcznej wysyłki raportów Excel."
+        onClose={() => setAccessModalSmtp(null)}
+        onSaved={() => setAccessTick((t) => t + 1)}
+      />
 
       <div className="flex items-center gap-2.5">
         <Mail size={24} className="text-blue-600" />
@@ -281,7 +308,9 @@ export default function SmtpView() {
                 </td>
               </tr>
             ) : (
-              sortedAccounts.map((acc) => (
+              sortedAccounts.map((acc) => {
+                const accessSummary = getResourceAccessSummary(RESOURCE_TYPES.SMTP, acc.id);
+                return (
                 <tr key={acc.id} className="hover:bg-blue-50/40">
                   <td className="p-3.5 font-mono font-bold">#{acc.id}</td>
                   <td className="p-3.5 font-extrabold text-black">{acc.name}</td>
@@ -290,6 +319,21 @@ export default function SmtpView() {
                   <td className="p-3.5 font-mono text-xs">{acc.smtpUsername || acc.username}</td>
                   <td className="p-3.5 text-right whitespace-nowrap">
                     <div className="flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setAccessModalSmtp(acc)}
+                        title="Ustaw, które role mają dostęp do tego konta SMTP"
+                        className={`flex items-center gap-1 px-3 py-1.5 border rounded-lg font-bold text-xs cursor-pointer transition ${
+                          accessSummary.isRestricted
+                            ? 'bg-amber-100 hover:bg-amber-200 border-amber-600 text-black'
+                            : 'bg-white border-blue-400 hover:bg-blue-50 text-black'
+                        }`}
+                      >
+                        <Shield size={14} />
+                        {accessSummary.isRestricted
+                          ? `Dostęp (${accessSummary.allowedCount}/${accessSummary.totalRoles})`
+                          : 'Dostęp'}
+                      </button>
                       <button
                         type="button"
                         onClick={() => handleEditSmtp(acc)}
@@ -307,7 +351,8 @@ export default function SmtpView() {
                     </div>
                   </td>
                 </tr>
-              ))
+                );
+              })
             )}
           </tbody>
         </table>

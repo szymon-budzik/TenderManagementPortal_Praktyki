@@ -19,7 +19,9 @@ public record AutomationProfileDto(
         String recipientEmails,
         OffsetDateTime lastRunAt,
         String lastRunStatus,
-        Boolean notificationsEnabled
+        Boolean notificationsEnabled,
+        String categoryQuery,
+        Boolean useCategoryQuery
 ) {
     public static AutomationProfileDto fromEntity(AutomationProfile p) {
         return new AutomationProfileDto(
@@ -37,7 +39,9 @@ public record AutomationProfileDto(
                 p.getRecipientEmails(),
                 p.getLastRunAt(),
                 p.getLastRunStatus(),
-                p.getNotificationsEnabled()
+                p.getNotificationsEnabled(),
+                p.getCategoryQuery(),
+                Boolean.TRUE.equals(p.getUseCategoryQuery())
         );
     }
 }

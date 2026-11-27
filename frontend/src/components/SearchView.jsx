@@ -1,46 +1,80 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import api from '../api';
-import { Play, Globe, KeyRound, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
-import { parseKeywordsString } from './KeywordsView';
+import {
+  Play,
+  Globe,
+  KeyRound,
+  CheckCircle2,
+  XCircle,
+  Loader2,
+  ListChecks,
+  Code2,
+  AlertCircle,
+  X,
+} from 'lucide-react';
+import { parseKeywordsString } from './keywords/keywordUtils';
+import CategoryQueryEditor from './common/CategoryQueryEditor';
+import { parseCategoryQuery } from './common/categoryQueryUtils';
+import { RESOURCE_TYPES, filterAccessibleResources } from '../rolesStore';
+import { useAccessibleResources } from '../hooks/useAccessibleResources';
 
 export default function SearchView() {
-  const [endpoints, setEndpoints] = useState([]);
-  const [categories, setCategories] = useState([]);
+  const [allEndpoints, setAllEndpoints] = useState([]);
+  const [allCategories, setAllCategories] = useState([]);
 
   const [selectedEndpointIds, setSelectedEndpointIds] = useState([]);
   const [selectedCategoryIds, setSelectedCategoryIds] = useState([]);
   // Osobny tryb OR / AND dla każdej kategorii: { [catId]: 'OR' | 'AND' }
   const [categoryMatchModes, setCategoryMatchModes] = useState({});
+  const [useCategoryQuery, setUseCategoryQuery] = useState(false);
+  const [categoryQuery, setCategoryQuery] = useState('');
 
   const [running, setRunning] = useState(false);
   const [runResult, setRunResult] = useState(null);
+  const [searchError, setSearchError] = useState('');
+
+  const endpoints = useAccessibleResources(RESOURCE_TYPES.ENDPOINT, allEndpoints);
+  const categories = useAccessibleResources(RESOURCE_TYPES.KEYWORD, allCategories);
+
+  const effectiveSelectedEndpointIds = useMemo(() => {
+    const allowedEpIds = new Set(endpoints.map((e) => e.id));
+    return selectedEndpointIds.filter((id) => allowedEpIds.has(id));
+  }, [endpoints, selectedEndpointIds]);
+
+  const effectiveSelectedCategoryIds = useMemo(() => {
+    const allowedCatIds = new Set(categories.map((c) => c.id));
+    return selectedCategoryIds.filter((id) => allowedCatIds.has(id));
+  }, [categories, selectedCategoryIds]);
 
   useEffect(() => {
-    const loadData = async () => {
-      try {
-        const [epRes, kwRes] = await Promise.all([
-          api.get('/search/sources'),
-          api.get('/keywords'),
-        ]);
+    let cancelled = false;
+    Promise.all([api.get('/search/sources'), api.get('/keywords')])
+      .then(([epRes, kwRes]) => {
+        if (cancelled) return;
         const epList = epRes.data || [];
         const kwList = kwRes.data || [];
 
-        setEndpoints(epList);
-        setCategories(kwList);
+        setAllEndpoints(epList);
+        setAllCategories(kwList);
 
-        setSelectedEndpointIds(epList.filter((e) => e.isActive).map((e) => e.id));
-        setSelectedCategoryIds(kwList.map((k) => k.id));
+        const accessibleEp = filterAccessibleResources(RESOURCE_TYPES.ENDPOINT, epList);
+        const accessibleKw = filterAccessibleResources(RESOURCE_TYPES.KEYWORD, kwList);
+
+        setSelectedEndpointIds(accessibleEp.filter((e) => e.isActive).map((e) => e.id));
+        setSelectedCategoryIds(accessibleKw.map((k) => k.id));
 
         const initialModes = {};
         kwList.forEach((k) => {
           initialModes[k.id] = 'OR';
         });
         setCategoryMatchModes(initialModes);
-      } catch (err) {
+      })
+      .catch((err) => {
         console.error('Błąd ładowania konfiguracji wyszukiwarki:', err);
-      }
+      });
+    return () => {
+      cancelled = true;
     };
-    loadData();
   }, []);
 
   const toggleEndpoint = (id) => {
@@ -64,20 +98,35 @@ export default function SearchView() {
     }));
   };
 
+  const parsedQuery = useMemo(
+    () => parseCategoryQuery(categoryQuery, categories),
+    [categoryQuery, categories]
+  );
+
+  const canRunSearch =
+    effectiveSelectedEndpointIds.length > 0 &&
+    (!useCategoryQuery || parsedQuery.valid);
+
   const handleRunFetch = async () => {
     setRunResult(null);
-    if (selectedEndpointIds.length === 0) return;
+    setSearchError('');
+    if (!canRunSearch) return;
 
     setRunning(true);
     try {
       const res = await api.post('/search/run', {
-        endpointIds: selectedEndpointIds,
-        keywordCategoryIds: selectedCategoryIds,
+        endpointIds: effectiveSelectedEndpointIds,
+        keywordCategoryIds: useCategoryQuery
+          ? categories.map((c) => c.id)
+          : effectiveSelectedCategoryIds,
         matchMode: 'OR',
         categoryMatchModes,
+        useCategoryQuery,
+        categoryQuery: useCategoryQuery ? categoryQuery.trim() : null,
       });
       setRunResult(res.data);
     } catch (err) {
+      setSearchError(err?.response?.data?.message || 'Błąd uruchamiania pobierania.');
       console.error('Błąd uruchamiania pobierania:', err);
     } finally {
       setRunning(false);
@@ -97,13 +146,29 @@ export default function SearchView() {
         <button
           type="button"
           onClick={handleRunFetch}
-          disabled={running || selectedEndpointIds.length === 0}
+          disabled={running || !canRunSearch}
           className="flex items-center justify-center gap-2.5 px-6 py-3.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-extrabold rounded-xl shadow-sm transition cursor-pointer text-base shrink-0"
         >
           {running ? <Loader2 size={20} className="animate-spin" /> : <Play size={20} />}
           {running ? 'Trwa pobieranie...' : 'Uruchom pobieranie'}
         </button>
       </div>
+
+      {searchError && (
+        <div className="p-3.5 bg-red-50 border border-red-500 rounded-xl text-xs font-bold text-black flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <AlertCircle size={16} className="text-red-600 shrink-0" />
+            <span>{searchError}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSearchError('')}
+            className="p-0.5 rounded hover:bg-red-100 cursor-pointer"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
 
       {runResult && (
         <div className="bg-white p-5 rounded-xl border-2 border-green-700 shadow-xs space-y-4">
@@ -191,7 +256,11 @@ export default function SearchView() {
         </div>
 
         {endpoints.length === 0 ? (
-          <p className="text-sm font-medium">Brak zdefiniowanych endpointów w systemie.</p>
+          <p className="text-sm font-medium">
+            {allEndpoints.length > 0
+              ? 'Twoja rola nie ma przyznanego dostępu do żadnego endpointu.'
+              : 'Brak zdefiniowanych endpointów w systemie.'}
+          </p>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {endpoints.map((ep) => {
@@ -235,9 +304,9 @@ export default function SearchView() {
         )}
       </div>
 
-      {/* SEKCJA 2: KEYWORDSY Z PRZYCISKIEM OR/AND NA PROSTOKĄCIE KAŻDEJ KATEGORII */}
+      {/* SEKCJA 2: KEYWORDSY — LISTA GOTOWCÓW ALBO ZAPYTANIE LOGICZNE */}
       <div className="bg-white p-6 rounded-xl border border-blue-200 shadow-xs space-y-5">
-        <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-blue-100">
+        <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-blue-100">
           <div className="flex items-center gap-2">
             <KeyRound size={20} className="text-blue-600" />
             <div>
@@ -245,30 +314,72 @@ export default function SearchView() {
                 2. Kategorie słów kluczowych (Keywordsy)
               </h3>
               <p className="text-xs font-semibold text-black">
-                Kliknij przycisk OR / AND w prawym górnym rogu wybranej kategorii, aby ustawić warunek dopasowania.
+                {useCategoryQuery
+                  ? 'Buduj złożone zapytania logiczne łączące kategorie operatorami OR / AND (np. IT;OR AND Chmura;AND).'
+                  : 'Kliknij przycisk OR / AND w prawym górnym rogu wybranej kategorii, aby ustawić warunek dopasowania słów.'}
               </p>
             </div>
           </div>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => setSelectedCategoryIds(categories.map((c) => c.id))}
-              className="px-3 py-1 text-xs font-bold bg-blue-50 border border-blue-300 rounded-lg hover:bg-blue-100 cursor-pointer"
-            >
-              Zaznacz wszystkie
-            </button>
-            <button
-              type="button"
-              onClick={() => setSelectedCategoryIds([])}
-              className="px-3 py-1 text-xs font-bold bg-white border border-blue-300 rounded-lg hover:bg-blue-50 cursor-pointer"
-            >
-              Odznacz wszystkie
-            </button>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex rounded-lg border-2 border-blue-600 overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setUseCategoryQuery(false)}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-extrabold cursor-pointer transition ${
+                  !useCategoryQuery
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-white text-black hover:bg-blue-50'
+                }`}
+              >
+                <ListChecks size={14} /> Lista kategorii
+              </button>
+              <button
+                type="button"
+                onClick={() => setUseCategoryQuery(true)}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-extrabold cursor-pointer transition ${
+                  useCategoryQuery
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-white text-black hover:bg-blue-50'
+                }`}
+              >
+                <Code2 size={14} /> Zapytanie tekstowe
+              </button>
+            </div>
+
+            {!useCategoryQuery && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setSelectedCategoryIds(categories.map((c) => c.id))}
+                  className="px-3 py-1.5 text-xs font-bold bg-blue-50 border border-blue-300 rounded-lg hover:bg-blue-100 cursor-pointer"
+                >
+                  Zaznacz wszystkie
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedCategoryIds([])}
+                  className="px-3 py-1.5 text-xs font-bold bg-white border border-blue-300 rounded-lg hover:bg-blue-50 cursor-pointer"
+                >
+                  Odznacz wszystkie
+                </button>
+              </>
+            )}
           </div>
         </div>
 
-        {categories.length === 0 ? (
-          <p className="text-sm font-medium">Brak zdefiniowanych kategorii słów kluczowych.</p>
+        {useCategoryQuery ? (
+          <CategoryQueryEditor
+            value={categoryQuery}
+            onChange={setCategoryQuery}
+            categories={categories}
+          />
+        ) : categories.length === 0 ? (
+          <p className="text-sm font-medium">
+            {allCategories.length > 0
+              ? 'Twoja rola nie ma przyznanego dostępu do żadnej kategorii słów kluczowych.'
+              : 'Brak zdefiniowanych kategorii słów kluczowych.'}
+          </p>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {categories.map((cat) => {

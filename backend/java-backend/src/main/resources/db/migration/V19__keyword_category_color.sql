@@ -1,0 +1,3 @@
+ALTER TABLE keyword_categories
+    ADD COLUMN color VARCHAR(20) NOT NULL DEFAULT '#93c5fd',
+    ADD COLUMN light_text BOOLEAN NOT NULL DEFAULT FALSE;
