@@ -29,6 +29,15 @@ export const getRuns = async () => {
   return res.data || [];
 };
 
+export const getReportsBadge = async () => {
+  const res = await api.get('/automation/runs/badge');
+  return res.data || { totalCount: 0, unreadCount: 0 };
+};
+
+export const markAllRunsRead = async () => {
+  await api.patch('/automation/runs/read-all');
+};
+
 export const deleteRun = async (id) => {
   await api.delete(`/automation/runs/${id}`);
 };
@@ -50,4 +59,14 @@ export const sendRunsEmail = async ({ runIds, emails, smtpAccountId }) => {
 export const getSmtpAccounts = async () => {
   const res = await api.get('/automation/smtp-accounts');
   return res.data || [];
+};
+
+export const getNotificationPreferences = async () => {
+  const res = await api.get('/automation/notifications/preferences');
+  return res.data || { sharedTendersEnabled: true, sharedReportsEnabled: true };
+};
+
+export const updateNotificationPreferences = async (payload) => {
+  const res = await api.patch('/automation/notifications/preferences', payload);
+  return res.data;
 };

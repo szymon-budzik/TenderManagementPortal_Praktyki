@@ -6,11 +6,11 @@ import com.przetargi.java_backend.entity.AutomationProfile;
 import com.przetargi.java_backend.entity.User;
 import com.przetargi.java_backend.repository.AutomationNotificationRepository;
 import com.przetargi.java_backend.repository.UserRepository;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
-import java.util.ArrayList;
 import java.util.List;
 
 @Service
@@ -30,10 +30,10 @@ public class AutomationNotificationService {
     @Transactional(readOnly = true)
     public List<AutomationNotificationDto> getLatestNotifications(String username) {
         Long userId = resolveUserId(username);
-        List<AutomationNotification> list = userId != null
-                ? notificationRepository.findTop50ByRecipientUserIdIsNullOrRecipientUserIdOrderByCreatedAtDesc(userId)
-                : notificationRepository.findTop50ByRecipientUserIdIsNullOrderByCreatedAtDesc();
-        return list.stream()
+        if (userId == null) {
+            return List.of();
+        }
+        return notificationRepository.findTop50ByRecipientUserIdOrderByCreatedAtDesc(userId).stream()
                 .map(AutomationNotificationDto::fromEntity)
                 .toList();
     }
@@ -43,8 +43,8 @@ public class AutomationNotificationService {
         AutomationNotification n = notificationRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Nie znaleziono powiadomienia o ID: " + id));
         Long userId = resolveUserId(username);
-        if (n.getRecipientUserId() != null && !n.getRecipientUserId().equals(userId)) {
-            throw new IllegalArgumentException("Brak dostępu do tego powiadomienia.");
+        if (userId == null || !userId.equals(n.getRecipientUserId())) {
+            throw new AccessDeniedException("Brak dostępu do tego powiadomienia.");
         }
         n.setIsRead(true);
         return AutomationNotificationDto.fromEntity(notificationRepository.save(n));
@@ -53,11 +53,10 @@ public class AutomationNotificationService {
     @Transactional
     public void markAllAsRead(String username) {
         Long userId = resolveUserId(username);
-        List<AutomationNotification> toUpdate = new ArrayList<>();
-        toUpdate.addAll(notificationRepository.findByIsReadFalseAndRecipientUserIdIsNull());
-        if (userId != null) {
-            toUpdate.addAll(notificationRepository.findByIsReadFalseAndRecipientUserId(userId));
+        if (userId == null) {
+            return;
         }
+        List<AutomationNotification> toUpdate = notificationRepository.findByIsReadFalseAndRecipientUserId(userId);
         for (AutomationNotification n : toUpdate) {
             n.setIsRead(true);
         }
@@ -68,12 +67,44 @@ public class AutomationNotificationService {
 
     @Transactional
     public void deleteNotification(Long id, String username) {
-        notificationRepository.findById(id).ifPresent(n -> {
-            Long userId = resolveUserId(username);
-            if (n.getRecipientUserId() == null || n.getRecipientUserId().equals(userId)) {
-                notificationRepository.deleteById(id);
-            }
-        });
+        Long userId = resolveUserId(username);
+        AutomationNotification n = notificationRepository.findById(id).orElse(null);
+        if (n == null) {
+            return;
+        }
+        if (userId == null || !userId.equals(n.getRecipientUserId())) {
+            throw new AccessDeniedException("Brak dostępu do tego powiadomienia.");
+        }
+        notificationRepository.deleteById(id);
+    }
+
+    @Transactional(readOnly = true)
+    public NotificationPreferencesDto getNotificationPreferences(String username) {
+        User user = requireUser(username);
+        return new NotificationPreferencesDto(
+                !Boolean.FALSE.equals(user.getNotifySharedTenders()),
+                !Boolean.FALSE.equals(user.getNotifySharedReports())
+        );
+    }
+
+    @Transactional
+    public NotificationPreferencesDto updateNotificationPreferences(
+            String username,
+            Boolean sharedTendersEnabled,
+            Boolean sharedReportsEnabled
+    ) {
+        User user = requireUser(username);
+        if (sharedTendersEnabled != null) {
+            user.setNotifySharedTenders(sharedTendersEnabled);
+        }
+        if (sharedReportsEnabled != null) {
+            user.setNotifySharedReports(sharedReportsEnabled);
+        }
+        User saved = userRepository.save(user);
+        return new NotificationPreferencesDto(
+                !Boolean.FALSE.equals(saved.getNotifySharedTenders()),
+                !Boolean.FALSE.equals(saved.getNotifySharedReports())
+        );
     }
 
     public void notifyUser(
@@ -85,6 +116,20 @@ public class AutomationNotificationService {
             String details,
             OffsetDateTime nowPl
     ) {
+        if (recipientUserId == null) {
+            return;
+        }
+        if ("SHARED_TENDER".equals(notificationType) || "SHARED_REPORT".equals(notificationType)) {
+            User recipient = userRepository.findById(recipientUserId).orElse(null);
+            if (recipient != null) {
+                if ("SHARED_TENDER".equals(notificationType) && Boolean.FALSE.equals(recipient.getNotifySharedTenders())) {
+                    return;
+                }
+                if ("SHARED_REPORT".equals(notificationType) && Boolean.FALSE.equals(recipient.getNotifySharedReports())) {
+                    return;
+                }
+            }
+        }
         AutomationNotification notif = new AutomationNotification();
         notif.setProfileId(null);
         notif.setProfileName(label != null ? label : "Powiadomienie");
@@ -107,7 +152,7 @@ public class AutomationNotificationService {
             String details,
             OffsetDateTime nowPl
     ) {
-        if (Boolean.FALSE.equals(profile.getNotificationsEnabled())) {
+        if (Boolean.FALSE.equals(profile.getNotificationsEnabled()) || profile.getOwnerUserId() == null) {
             return;
         }
         AutomationNotification notif = new AutomationNotification();
@@ -126,7 +171,7 @@ public class AutomationNotificationService {
         notif.setDetails(details != null ? details.trim() : "");
         notif.setIsRead(false);
         notif.setCreatedAt(nowPl);
-        notif.setRecipientUserId(null);
+        notif.setRecipientUserId(profile.getOwnerUserId());
         notif.setNotificationType("AUTOMATION");
         notificationRepository.save(notif);
     }
@@ -137,7 +182,7 @@ public class AutomationNotificationService {
             String errMsg,
             OffsetDateTime nowPl
     ) {
-        if (Boolean.FALSE.equals(profile.getNotificationsEnabled())) {
+        if (Boolean.FALSE.equals(profile.getNotificationsEnabled()) || profile.getOwnerUserId() == null) {
             return;
         }
         AutomationNotification notif = new AutomationNotification();
@@ -151,7 +196,7 @@ public class AutomationNotificationService {
                 + "\nSzczegóły: " + errMsg);
         notif.setIsRead(false);
         notif.setCreatedAt(nowPl);
-        notif.setRecipientUserId(null);
+        notif.setRecipientUserId(profile.getOwnerUserId());
         notif.setNotificationType("AUTOMATION");
         notificationRepository.save(notif);
     }
@@ -162,4 +207,14 @@ public class AutomationNotificationService {
         }
         return userRepository.findByUsername(username).map(User::getId).orElse(null);
     }
+
+    private User requireUser(String username) {
+        if (username == null || username.isBlank()) {
+            throw new AccessDeniedException("Brak uwierzytelnionego użytkownika.");
+        }
+        return userRepository.findByUsername(username)
+                .orElseThrow(() -> new AccessDeniedException("Nie znaleziono użytkownika: " + username));
+    }
+
+    public record NotificationPreferencesDto(boolean sharedTendersEnabled, boolean sharedReportsEnabled) {}
 }

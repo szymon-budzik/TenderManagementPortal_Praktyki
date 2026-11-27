@@ -8,13 +8,19 @@ import com.przetargi.java_backend.dto.TenderUpdateDto;
 import com.przetargi.java_backend.entity.FetchRun;
 import com.przetargi.java_backend.entity.Tender;
 import com.przetargi.java_backend.entity.TenderUpdate;
+import com.przetargi.java_backend.entity.UserTender;
 import com.przetargi.java_backend.entity.enums.TenderStatus;
+import com.przetargi.java_backend.repository.SharedTenderRepository;
 import com.przetargi.java_backend.repository.TenderRepository;
-import com.przetargi.java_backend.repository.TenderSpecifications;
 import com.przetargi.java_backend.repository.TenderUpdateRepository;
+import com.przetargi.java_backend.repository.UserTenderRepository;
+import com.przetargi.java_backend.repository.UserTenderSpecifications;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -24,46 +30,84 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 @Service
 public class TenderService {
 
+    private static final Set<String> TENDER_SORT_FIELDS = Set.of(
+            "publicationDate",
+            "title",
+            "externalId",
+            "submissionDeadline",
+            "lastUpdatedAt",
+            "groupKey"
+    );
+
     private final TenderRepository tenderRepository;
+    private final UserTenderRepository userTenderRepository;
+    private final SharedTenderRepository sharedTenderRepository;
     private final TenderUpdateRepository tenderUpdateRepository;
     private final TenderDateService dateService;
     private final ObservedTenderUpdateService observedUpdateService;
     private final ReportExportService reportExportService;
+    private final CurrentUserService currentUserService;
 
     public TenderService(
             TenderRepository tenderRepository,
+            UserTenderRepository userTenderRepository,
+            SharedTenderRepository sharedTenderRepository,
             TenderUpdateRepository tenderUpdateRepository,
             TenderDateService dateService,
             ObservedTenderUpdateService observedUpdateService,
-            ReportExportService reportExportService
+            ReportExportService reportExportService,
+            CurrentUserService currentUserService
     ) {
         this.tenderRepository = tenderRepository;
+        this.userTenderRepository = userTenderRepository;
+        this.sharedTenderRepository = sharedTenderRepository;
         this.tenderUpdateRepository = tenderUpdateRepository;
         this.dateService = dateService;
         this.observedUpdateService = observedUpdateService;
         this.reportExportService = reportExportService;
+        this.currentUserService = currentUserService;
     }
 
     @Transactional(readOnly = true)
     public Page<TenderResponseDto> getTendersPage(TenderStatus status, Integer minScore, String search, Pageable pageable) {
-        Specification<Tender> spec = TenderSpecifications.withFilters(status, minScore, search);
-        return tenderRepository.findAll(spec, pageable).map(TenderResponseDto::fromEntity);
+        Long userId = currentUserService.requireCurrentUser().getId();
+        return getTendersPageForUser(userId, status, minScore, search, pageable);
+    }
+
+    @Transactional(readOnly = true)
+    public Page<TenderResponseDto> getTendersPageForUser(
+            Long userId,
+            TenderStatus status,
+            Integer minScore,
+            String search,
+            Pageable pageable
+    ) {
+        Specification<UserTender> spec = UserTenderSpecifications.withFilters(userId, status, minScore, search);
+        Pageable remapped = remapPageableForUserTender(pageable);
+        return userTenderRepository.findAll(spec, remapped).map(TenderResponseDto::fromUserTender);
     }
 
     @Transactional
     public List<ObservedTenderDto> getObservedTenders() {
-        List<Tender> observed = tenderRepository.findByStatusOrderByIdAsc(TenderStatus.INTERESTED);
+        Long userId = currentUserService.requireCurrentUser().getId();
+        return getObservedTendersForUser(userId);
+    }
+
+    @Transactional
+    public List<ObservedTenderDto> getObservedTendersForUser(Long userId) {
+        List<UserTender> observed = userTenderRepository.findByUserIdAndStatusOrderByIdAsc(userId, TenderStatus.INTERESTED);
         if (observed.isEmpty()) {
             return List.of();
         }
 
-        // Dla starszych przetargów (pobranych przed V12) spróbuj jednorazowo uzupełnić termin z opisu
-        for (Tender t : observed) {
-            if (t.getSubmissionDeadline() == null && t.getDescription() != null) {
+        for (UserTender ut : observed) {
+            Tender t = ut.getTender();
+            if (t != null && t.getSubmissionDeadline() == null && t.getDescription() != null) {
                 OffsetDateTime extracted = dateService.extractDeadlineFromDescription(t.getDescription());
                 if (extracted != null) {
                     t.setSubmissionDeadline(extracted);
@@ -72,7 +116,9 @@ public class TenderService {
             }
         }
 
-        List<Long> ids = observed.stream().map(Tender::getId).toList();
+        List<Long> ids = observed.stream()
+                .map(ut -> ut.getTender().getId())
+                .toList();
         List<TenderUpdate> allUpdates = tenderUpdateRepository.findByTenderIdInOrderByVersionNumberDesc(ids);
 
         Map<Long, List<TenderUpdate>> updatesByTender = new LinkedHashMap<>();
@@ -81,7 +127,8 @@ public class TenderService {
         }
 
         List<ObservedTenderDto> result = new ArrayList<>();
-        for (Tender t : observed) {
+        for (UserTender ut : observed) {
+            Tender t = ut.getTender();
             List<TenderUpdate> tenderUpdates = updatesByTender.getOrDefault(t.getId(), List.of());
             OffsetDateTime effectiveDeadline = t.getSubmissionDeadline();
             for (TenderUpdate u : tenderUpdates) {
@@ -90,14 +137,18 @@ public class TenderService {
                     break;
                 }
             }
+            int lastReadVer = ut.getLastReadUpdateVersion() != null ? ut.getLastReadUpdateVersion() : 0;
             long unreadCount = tenderUpdates.stream()
-                    .filter(u -> !Boolean.TRUE.equals(u.getIsRead()))
+                    .filter(u -> u.getVersionNumber() == null || u.getVersionNumber() > lastReadVer)
                     .count();
             List<TenderUpdateDto> updateDtos = tenderUpdates.stream()
-                    .map(TenderUpdateDto::fromEntity)
+                    .map(u -> {
+                        boolean isReadForUser = u.getVersionNumber() != null && u.getVersionNumber() <= lastReadVer;
+                        return TenderUpdateDto.fromEntity(u, isReadForUser);
+                    })
                     .toList();
             result.add(new ObservedTenderDto(
-                    TenderResponseDto.fromEntity(t),
+                    TenderResponseDto.fromUserTender(ut),
                     updateDtos,
                     effectiveDeadline,
                     unreadCount
@@ -109,18 +160,26 @@ public class TenderService {
 
     @Transactional(readOnly = true)
     public ObservedBadgeDto getObservedBadge() {
-        long observedCount = tenderRepository.countByStatus(TenderStatus.INTERESTED);
-        long unreadTendersCount = tenderRepository.countByStatusAndHasUnreadUpdateTrue(TenderStatus.INTERESTED);
+        Long userId = currentUserService.requireCurrentUser().getId();
+        return getObservedBadgeForUser(userId);
+    }
+
+    @Transactional(readOnly = true)
+    public ObservedBadgeDto getObservedBadgeForUser(Long userId) {
+        long observedCount = userTenderRepository.countByUserIdAndStatus(userId, TenderStatus.INTERESTED);
+        long unreadTendersCount = userTenderRepository.countByUserIdAndStatusAndHasUnreadUpdateTrue(userId, TenderStatus.INTERESTED);
         return new ObservedBadgeDto(observedCount, unreadTendersCount);
     }
 
     public TenderExecutionService.ObservedCheckSummary checkObservedUpdates() {
-        return observedUpdateService.checkUpdatesForObservedTenders();
+        Long userId = currentUserService.requireCurrentUser().getId();
+        return observedUpdateService.checkUpdatesForUser(userId);
     }
 
     @Transactional
     public CreatedReportDto createObservedReport(List<Long> tenderIds, List<Long> updateIds, String reportName) {
-        FetchRun run = reportExportService.createReportFromObserved(tenderIds, updateIds, reportName);
+        Long userId = currentUserService.requireCurrentUser().getId();
+        FetchRun run = reportExportService.createReportFromObserved(tenderIds, updateIds, reportName, userId);
         return new CreatedReportDto(
                 run.getId(),
                 run.getSourceType(),
@@ -130,26 +189,35 @@ public class TenderService {
     }
 
     @Transactional
-    public boolean markTenderUpdatesRead(Long id) {
-        Tender tender = tenderRepository.findById(id).orElse(null);
-        if (tender == null) {
+    public boolean markTenderUpdatesRead(Long tenderId) {
+        Long userId = currentUserService.requireCurrentUser().getId();
+        return markTenderUpdatesReadForUser(userId, tenderId);
+    }
+
+    @Transactional
+    public boolean markTenderUpdatesReadForUser(Long userId, Long tenderId) {
+        UserTender ut = userTenderRepository.findByUserIdAndTenderId(userId, tenderId).orElse(null);
+        if (ut == null) {
             return false;
         }
-        List<TenderUpdate> unread = tenderUpdateRepository.findByTenderIdAndIsReadFalse(id);
-        for (TenderUpdate u : unread) {
-            u.setIsRead(true);
-        }
-        if (!unread.isEmpty()) {
-            tenderUpdateRepository.saveAll(unread);
-        }
-        tender.setHasUnreadUpdate(false);
-        tenderRepository.save(tender);
+        int maxVersion = getMaxUpdateVersion(tenderId);
+        ut.setHasUnreadUpdate(false);
+        ut.setLastReadUpdateVersion(maxVersion);
+        ut.setUpdatedAt(dateService.nowPoland());
+        userTenderRepository.save(ut);
         return true;
     }
 
     @Transactional
-    public Optional<TenderResponseDto> updateDeadline(Long id, String rawSubmissionDeadline) {
-        return tenderRepository.findById(id).map(tender -> {
+    public Optional<TenderResponseDto> updateDeadline(Long tenderId, String rawSubmissionDeadline) {
+        Long userId = currentUserService.requireCurrentUser().getId();
+        return updateDeadlineForUser(userId, tenderId, rawSubmissionDeadline);
+    }
+
+    @Transactional
+    public Optional<TenderResponseDto> updateDeadlineForUser(Long userId, Long tenderId, String rawSubmissionDeadline) {
+        return userTenderRepository.findByUserIdAndTenderId(userId, tenderId).map(ut -> {
+            Tender tender = ut.getTender();
             if (rawSubmissionDeadline == null || rawSubmissionDeadline.isBlank()) {
                 tender.setSubmissionDeadline(null);
             } else {
@@ -159,51 +227,143 @@ public class TenderService {
                 }
                 tender.setSubmissionDeadline(parsed);
             }
-            return TenderResponseDto.fromEntity(tenderRepository.save(tender));
+            tenderRepository.save(tender);
+            return TenderResponseDto.fromUserTender(ut);
         });
     }
 
     @Transactional
     public boolean deleteUpdate(Long updateId) {
+        Long userId = currentUserService.requireCurrentUser().getId();
+        return deleteUpdateForUser(userId, updateId);
+    }
+
+    @Transactional
+    public boolean deleteUpdateForUser(Long userId, Long updateId) {
         TenderUpdate update = tenderUpdateRepository.findById(updateId).orElse(null);
         if (update == null) {
             return false;
         }
         Long tenderId = update.getTenderId();
+        if (userTenderRepository.findByUserIdAndTenderId(userId, tenderId).isEmpty()) {
+            throw new AccessDeniedException("Brak dostępu do tej aktualizacji.");
+        }
         tenderUpdateRepository.deleteById(updateId);
 
-        tenderRepository.findById(tenderId).ifPresent(tender -> {
-            boolean stillHasUnread = !tenderUpdateRepository.findByTenderIdAndIsReadFalse(tenderId).isEmpty();
-            tender.setHasUnreadUpdate(stillHasUnread);
-            tenderRepository.save(tender);
-        });
+        int remainingMaxVersion = getMaxUpdateVersion(tenderId);
+        List<UserTender> observers = userTenderRepository.findByTenderIdAndStatus(tenderId, TenderStatus.INTERESTED);
+        for (UserTender ut : observers) {
+            int lastReadVer = ut.getLastReadUpdateVersion() != null ? ut.getLastReadUpdateVersion() : 0;
+            ut.setHasUnreadUpdate(remainingMaxVersion > lastReadVer);
+        }
+        if (!observers.isEmpty()) {
+            userTenderRepository.saveAll(observers);
+        }
         return true;
     }
 
     @Transactional
-    public Optional<TenderResponseDto> updateStatus(Long id, TenderStatus status) {
-        return tenderRepository.findById(id).map(tender -> {
-            if (status != null) {
-                tender.setStatus(status);
-                if (status == TenderStatus.INTERESTED
-                        && tender.getSubmissionDeadline() == null
-                        && tender.getDescription() != null) {
-                    OffsetDateTime extracted = dateService.extractDeadlineFromDescription(tender.getDescription());
-                    if (extracted != null) {
-                        tender.setSubmissionDeadline(extracted);
-                    }
-                }
-            }
-            return TenderResponseDto.fromEntity(tenderRepository.save(tender));
-        });
+    public Optional<TenderResponseDto> updateStatus(Long tenderId, TenderStatus status) {
+        Long userId = currentUserService.requireCurrentUser().getId();
+        return updateStatusForUser(userId, tenderId, status);
     }
 
     @Transactional
-    public boolean deleteTender(Long id) {
-        if (!tenderRepository.existsById(id)) {
+    public Optional<TenderResponseDto> updateStatusForUser(Long userId, Long tenderId, TenderStatus status) {
+        OffsetDateTime nowPl = dateService.nowPoland();
+        UserTender ut = userTenderRepository.findByUserIdAndTenderId(userId, tenderId).orElse(null);
+        if (ut == null) {
+            if (!sharedTenderRepository.existsByRecipientUserIdAndTenderId(userId, tenderId)) {
+                return Optional.empty();
+            }
+            Tender tender = tenderRepository.findById(tenderId).orElse(null);
+            if (tender == null) {
+                return Optional.empty();
+            }
+            ut = new UserTender();
+            ut.setUserId(userId);
+            ut.setTender(tender);
+            ut.setStatus(status != null ? status : TenderStatus.NEW);
+            ut.setScore(tender.getScore() != null ? tender.getScore() : 0);
+            ut.setScoreBreakdown(extractBreakdownLineOrNull(tender.getDescription()));
+            ut.setHasUnreadUpdate(false);
+            ut.setLastReadUpdateVersion(getMaxUpdateVersion(tenderId));
+            ut.setCreatedAt(nowPl);
+            ut.setUpdatedAt(nowPl);
+        } else if (status != null) {
+            TenderStatus prevStatus = ut.getStatus();
+            ut.setStatus(status);
+            if (status == TenderStatus.INTERESTED && prevStatus != TenderStatus.INTERESTED) {
+                ut.setLastReadUpdateVersion(getMaxUpdateVersion(tenderId));
+                ut.setHasUnreadUpdate(false);
+            }
+            ut.setUpdatedAt(nowPl);
+        }
+
+        Tender tender = ut.getTender();
+        if (status == TenderStatus.INTERESTED
+                && tender.getSubmissionDeadline() == null
+                && tender.getDescription() != null) {
+            OffsetDateTime extracted = dateService.extractDeadlineFromDescription(tender.getDescription());
+            if (extracted != null) {
+                tender.setSubmissionDeadline(extracted);
+                tenderRepository.save(tender);
+            }
+        }
+
+        UserTender saved = userTenderRepository.save(ut);
+        return Optional.of(TenderResponseDto.fromUserTender(saved));
+    }
+
+    @Transactional
+    public boolean deleteTender(Long tenderId) {
+        Long userId = currentUserService.requireCurrentUser().getId();
+        return deleteTenderForUser(userId, tenderId);
+    }
+
+    @Transactional
+    public boolean deleteTenderForUser(Long userId, Long tenderId) {
+        UserTender ut = userTenderRepository.findByUserIdAndTenderId(userId, tenderId).orElse(null);
+        if (ut == null) {
             return false;
         }
-        tenderRepository.deleteById(id);
+        // Usuwamy wyłącznie powiązanie użytkownika z katalogiem przetargów —
+        // rekord w tabeli tenders pozostaje nietknięty dla innych użytkowników, raportów i przesłanych.
+        userTenderRepository.delete(ut);
         return true;
+    }
+
+    private int getMaxUpdateVersion(Long tenderId) {
+        List<TenderUpdate> updates = tenderUpdateRepository.findByTenderIdOrderByVersionNumberDesc(tenderId);
+        if (updates.isEmpty() || updates.get(0).getVersionNumber() == null) {
+            return 0;
+        }
+        return updates.get(0).getVersionNumber();
+    }
+
+    private String extractBreakdownLineOrNull(String description) {
+        if (description == null || description.isBlank()) {
+            return null;
+        }
+        for (String line : description.split("\n")) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("Punktacja kategorii:")) {
+                return trimmed;
+            }
+        }
+        return null;
+    }
+
+    private Pageable remapPageableForUserTender(Pageable pageable) {
+        if (pageable == null || pageable.isUnpaged() || pageable.getSort().isUnsorted()) {
+            return pageable;
+        }
+        List<Sort.Order> mappedOrders = new ArrayList<>();
+        for (Sort.Order order : pageable.getSort()) {
+            String prop = order.getProperty();
+            String mappedProp = TENDER_SORT_FIELDS.contains(prop) ? "tender." + prop : prop;
+            mappedOrders.add(new Sort.Order(order.getDirection(), mappedProp));
+        }
+        return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), Sort.by(mappedOrders));
     }
 }

@@ -15,13 +15,16 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response && (error.response.status === 401 || error.response.status === 403)) {
+    const status = error.response?.status;
+    const hasDomainMessage = Boolean(error.response?.data?.message);
+    if (status === 401 || (status === 403 && !hasDomainMessage)) {
       const url = error.config?.url || '';
       if (!url.includes('/auth/login')) {
         localStorage.removeItem('token');
         localStorage.removeItem('username');
         localStorage.removeItem('role');
-        window.dispatchEvent(new Event('authInvalid'));
+        localStorage.removeItem('activeTab');
+        window.dispatchEvent(new Event('authForceLogout'));
       }
     }
     return Promise.reject(error);

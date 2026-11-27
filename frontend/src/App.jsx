@@ -55,6 +55,7 @@ export default function App() {
 
   const [observedBadge, setObservedBadge] = useState({ observedCount: 0, unreadCount: 0 });
   const [sharedBadge, setSharedBadge] = useState({ totalCount: 0, unreadCount: 0 });
+  const [reportsBadge, setReportsBadge] = useState({ totalCount: 0, unreadCount: 0 });
   const [backupModalOpen, setBackupModalOpen] = useState(false);
   const [viewRefreshKey, setViewRefreshKey] = useState(0);
   const [, setTick] = useState(0);
@@ -69,7 +70,23 @@ export default function App() {
     localStorage.removeItem('token');
     localStorage.removeItem('username');
     localStorage.removeItem('role');
+    localStorage.removeItem('activeTab');
+    setActiveTab('search');
+    setObservedBadge({ observedCount: 0, unreadCount: 0 });
+    setSharedBadge({ totalCount: 0, unreadCount: 0 });
+    setReportsBadge({ totalCount: 0, unreadCount: 0 });
+    setBackupModalOpen(false);
     setAuth(null);
+  };
+
+  const handleLoginSuccess = (data) => {
+    localStorage.removeItem('activeTab');
+    setActiveTab('search');
+    setObservedBadge({ observedCount: 0, unreadCount: 0 });
+    setSharedBadge({ totalCount: 0, unreadCount: 0 });
+    setReportsBadge({ totalCount: 0, unreadCount: 0 });
+    setViewRefreshKey((k) => k + 1);
+    setAuth(data);
   };
 
   const fetchObservedBadge = async () => {
@@ -98,21 +115,47 @@ export default function App() {
     }
   };
 
+  const fetchReportsBadge = async () => {
+    if (!localStorage.getItem('token')) return;
+    try {
+      const res = await api.get('/automation/runs/badge');
+      setReportsBadge({
+        totalCount: res.data?.totalCount || 0,
+        unreadCount: res.data?.unreadCount || 0,
+      });
+    } catch {
+      // Ciche pominięcie
+    }
+  };
+
   useEffect(() => {
     const handleUpdate = () => setTick((t) => t + 1);
-    const handleForceLogout = () => setAuth(null);
+    const handleForceLogout = () => {
+      localStorage.removeItem('activeTab');
+      setActiveTab('search');
+      setObservedBadge({ observedCount: 0, unreadCount: 0 });
+      setSharedBadge({ totalCount: 0, unreadCount: 0 });
+      setReportsBadge({ totalCount: 0, unreadCount: 0 });
+      setBackupModalOpen(false);
+      setAuth(null);
+    };
     const handleObservedUpdated = () => fetchObservedBadge();
     const handleSharedUpdated = () => fetchSharedBadge();
+    const handleReportsUpdated = () => fetchReportsBadge();
 
     window.addEventListener('rolesUpdated', handleUpdate);
     window.addEventListener('authForceLogout', handleForceLogout);
+    window.addEventListener('authInvalid', handleForceLogout);
     window.addEventListener('observedUpdated', handleObservedUpdated);
     window.addEventListener('sharedUpdated', handleSharedUpdated);
+    window.addEventListener('reportsUpdated', handleReportsUpdated);
     return () => {
       window.removeEventListener('rolesUpdated', handleUpdate);
       window.removeEventListener('authForceLogout', handleForceLogout);
+      window.removeEventListener('authInvalid', handleForceLogout);
       window.removeEventListener('observedUpdated', handleObservedUpdated);
       window.removeEventListener('sharedUpdated', handleSharedUpdated);
+      window.removeEventListener('reportsUpdated', handleReportsUpdated);
     };
   }, []);
 
@@ -127,6 +170,7 @@ export default function App() {
         setCheckingSession(false);
         fetchObservedBadge();
         fetchSharedBadge();
+        fetchReportsBadge();
       })
       .catch(() => {
         handleLogout();
@@ -140,9 +184,10 @@ export default function App() {
     const refreshBadges = async () => {
       if (!localStorage.getItem('token')) return;
       try {
-        const [obsRes, sharedRes] = await Promise.all([
+        const [obsRes, sharedRes, reportsRes] = await Promise.all([
           api.get('/tenders/observed/badge').catch(() => null),
           api.get('/shares/tenders/badge').catch(() => null),
+          api.get('/automation/runs/badge').catch(() => null),
         ]);
         if (cancelled) return;
         if (obsRes) {
@@ -155,6 +200,12 @@ export default function App() {
           setSharedBadge({
             totalCount: sharedRes.data?.totalCount || 0,
             unreadCount: sharedRes.data?.unreadCount || 0,
+          });
+        }
+        if (reportsRes) {
+          setReportsBadge({
+            totalCount: reportsRes.data?.totalCount || 0,
+            unreadCount: reportsRes.data?.unreadCount || 0,
           });
         }
       } catch {
@@ -174,17 +225,18 @@ export default function App() {
   }
 
   if (!auth) {
-    return <LoginView onLoginSuccess={(data) => setAuth(data)} />;
+    return <LoginView onLoginSuccess={handleLoginSuccess} />;
   }
 
   const effectiveRole = getEffectiveUserRole(auth.username, auth.role);
   const permissions = getRolePermissions(effectiveRole);
+  const isAdmin = effectiveRole === 'ROLE_ADMIN';
 
   const alwaysAvailableItems = [
     { id: 'search', label: 'Wyszukiwarka', icon: Search },
     { id: 'automation', label: 'Automatyzacja', icon: Clock },
-    { id: 'reports', label: 'Raporty', icon: FileSpreadsheet },
     { id: 'tenders', label: 'Przetargi', icon: FileText },
+    { id: 'reports', label: 'Raporty', icon: FileSpreadsheet },
     { id: 'observed', label: 'Obserwowane', icon: BookmarkCheck },
     { id: 'shared', label: 'Przesłane', icon: Inbox },
     { id: 'analytics', label: 'Statystyki', icon: BarChart3 },
@@ -201,7 +253,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex bg-slate-50 text-black">
-      {backupModalOpen && (
+      {isAdmin && backupModalOpen && (
         <ConfigBackupModal
           onClose={() => setBackupModalOpen(false)}
           onImported={() => {
@@ -223,7 +275,7 @@ export default function App() {
               </p>
               <div className="flex items-center gap-1.5 shrink-0">
                 <ThemeToggleButton isDark={isDark} onToggle={toggleTheme} />
-                <NotificationsBell onNavigateTab={handleSelectTab} />
+                <NotificationsBell key={auth.username} onNavigateTab={handleSelectTab} />
               </div>
             </div>
           </div>
@@ -232,6 +284,7 @@ export default function App() {
             {alwaysAvailableItems.map((item) => {
               const Icon = item.icon;
               const isActive = activeTab === item.id;
+              const isReportsTab = item.id === 'reports';
               const isObservedTab = item.id === 'observed';
               const isSharedTab = item.id === 'shared';
 
@@ -249,6 +302,30 @@ export default function App() {
                     <Icon size={18} className="shrink-0" />
                     <span className="truncate">{item.label}</span>
                   </span>
+
+                  {isReportsTab && reportsBadge.unreadCount > 0 && (
+                    <span
+                      title={`Nowe raporty: ${reportsBadge.unreadCount}`}
+                      className="px-2 py-0.5 rounded-full text-[11px] font-extrabold bg-red-600 text-white shrink-0"
+                    >
+                      {reportsBadge.unreadCount}
+                    </span>
+                  )}
+
+                  {isReportsTab &&
+                    reportsBadge.unreadCount === 0 &&
+                    reportsBadge.totalCount > 0 && (
+                      <span
+                        title={`Wszystkie raporty: ${reportsBadge.totalCount}`}
+                        className={`px-2 py-0.5 rounded-full text-[11px] font-extrabold shrink-0 ${
+                          isActive
+                            ? 'bg-white/25 text-white'
+                            : 'bg-blue-100 text-blue-800'
+                        }`}
+                      >
+                        {reportsBadge.totalCount}
+                      </span>
+                    )}
 
                   {isObservedTab && observedBadge.unreadCount > 0 && (
                     <span
@@ -325,14 +402,16 @@ export default function App() {
                   );
                 })}
 
-                <button
-                  type="button"
-                  onClick={() => setBackupModalOpen(true)}
-                  className="w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition cursor-pointer bg-emerald-50 text-black border border-emerald-400 hover:bg-emerald-100"
-                >
-                  <Database size={18} className="text-emerald-700" />
-                  Backup JSON
-                </button>
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => setBackupModalOpen(true)}
+                    className="w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition cursor-pointer bg-emerald-50 text-black border border-emerald-400 hover:bg-emerald-100"
+                  >
+                    <Database size={18} className="text-emerald-700" />
+                    Backup JSON
+                  </button>
+                )}
               </div>
             )}
           </nav>
@@ -349,7 +428,7 @@ export default function App() {
         </div>
       </aside>
 
-      <main key={viewRefreshKey} className="flex-1 p-8 overflow-y-auto">
+      <main key={`${auth.username}:${viewRefreshKey}`} className="flex-1 p-8 overflow-y-auto">
         {activeTab === 'search' && <SearchView />}
         {activeTab === 'automation' && <AutomationView />}
         {activeTab === 'reports' && <ReportsView />}

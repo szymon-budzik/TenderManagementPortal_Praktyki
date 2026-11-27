@@ -3,15 +3,19 @@ package com.przetargi.java_backend.service;
 import com.przetargi.java_backend.entity.ApiEndpoint;
 import com.przetargi.java_backend.entity.Tender;
 import com.przetargi.java_backend.entity.TenderUpdate;
+import com.przetargi.java_backend.entity.UserTender;
 import com.przetargi.java_backend.entity.enums.TenderStatus;
 import com.przetargi.java_backend.repository.ApiEndpointRepository;
 import com.przetargi.java_backend.repository.TenderRepository;
 import com.przetargi.java_backend.repository.TenderUpdateRepository;
+import com.przetargi.java_backend.repository.UserTenderRepository;
 import org.springframework.stereotype.Service;
 
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -19,6 +23,7 @@ import java.util.Optional;
 public class ObservedTenderUpdateService {
 
     private final TenderRepository tenderRepository;
+    private final UserTenderRepository userTenderRepository;
     private final TenderUpdateRepository tenderUpdateRepository;
     private final ApiEndpointRepository endpointRepository;
     private final TenderSourceFetchService sourceFetchService;
@@ -26,12 +31,14 @@ public class ObservedTenderUpdateService {
 
     public ObservedTenderUpdateService(
             TenderRepository tenderRepository,
+            UserTenderRepository userTenderRepository,
             TenderUpdateRepository tenderUpdateRepository,
             ApiEndpointRepository endpointRepository,
             TenderSourceFetchService sourceFetchService,
             TenderDateService dateService
     ) {
         this.tenderRepository = tenderRepository;
+        this.userTenderRepository = userTenderRepository;
         this.tenderUpdateRepository = tenderUpdateRepository;
         this.endpointRepository = endpointRepository;
         this.sourceFetchService = sourceFetchService;
@@ -39,12 +46,34 @@ public class ObservedTenderUpdateService {
     }
 
     /**
-     * Sprawdza wyłącznie aktualizacje dla obserwowanych (INTERESTED) przetargów ze wszystkich aktywnych źródeł.
-     * Nie dodaje nowych przetargów do głównej listy i nie tworzy wpisu w historii Raportów.
+     * Sprawdza aktualizacje dla wszystkich unikalnych przetargów obserwowanych (INTERESTED)
+     * przez przynajmniej jednego użytkownika w user_tenders.
+     * Każdy unikalny przetarg jest sprawdzany zewnętrznie dokładnie RAZ, a wykryte zmiany
+     * powiadamiają wszystkich obserwujących go użytkowników.
      */
     public TenderExecutionService.ObservedCheckSummary checkUpdatesForObservedTenders() {
-        List<Tender> observedTenders = tenderRepository.findByStatusOrderByIdAsc(TenderStatus.INTERESTED);
-        if (observedTenders.isEmpty()) {
+        List<Tender> observedTenders = userTenderRepository.findDistinctTendersByStatus(TenderStatus.INTERESTED);
+        return checkUpdatesForTenderList(observedTenders);
+    }
+
+    /**
+     * Sprawdza aktualizacje wyłącznie dla przetargów obserwowanych przez wskazanego użytkownika.
+     */
+    public TenderExecutionService.ObservedCheckSummary checkUpdatesForUser(Long userId) {
+        if (userId == null) {
+            return new TenderExecutionService.ObservedCheckSummary(0, 0, 0, List.of());
+        }
+        Map<Long, Tender> distinct = new LinkedHashMap<>();
+        for (UserTender ut : userTenderRepository.findByUserIdAndStatusOrderByIdAsc(userId, TenderStatus.INTERESTED)) {
+            if (ut.getTender() != null && ut.getTender().getId() != null) {
+                distinct.putIfAbsent(ut.getTender().getId(), ut.getTender());
+            }
+        }
+        return checkUpdatesForTenderList(new ArrayList<>(distinct.values()));
+    }
+
+    private TenderExecutionService.ObservedCheckSummary checkUpdatesForTenderList(List<Tender> observedTenders) {
+        if (observedTenders == null || observedTenders.isEmpty()) {
             return new TenderExecutionService.ObservedCheckSummary(0, 0, 0, List.of());
         }
 
@@ -107,8 +136,6 @@ public class ObservedTenderUpdateService {
             for (Tender t : observedTenders) {
                 if (groupKey.equals(t.getGroupKey())) return Optional.of(t);
             }
-            Optional<Tender> dbMatch = tenderRepository.findFirstByGroupKeyAndStatus(groupKey, TenderStatus.INTERESTED);
-            if (dbMatch.isPresent()) return dbMatch;
         }
         String normTitle = sourceFetchService.normalizeTitleForGrouping(title);
         if (normTitle.length() >= 18) {
@@ -175,6 +202,8 @@ public class ObservedTenderUpdateService {
         if (titleChanged) changes.add("Zmiana tytułu postępowania");
         if (descChanged) changes.add("Zaktualizowano treść / parametry ogłoszenia");
 
+        String changeSummary = String.join(" • ", changes);
+
         TenderUpdate update = new TenderUpdate();
         update.setTenderId(observed.getId());
         update.setVersionNumber(latest != null ? (latest.getVersionNumber() + 1) : 1);
@@ -182,7 +211,7 @@ public class ObservedTenderUpdateService {
         update.setTitle(incomingTitle);
         update.setDescription(incomingDescription);
         update.setSubmissionDeadline(incomingDeadline != null ? incomingDeadline : baseDeadline);
-        update.setChangeSummary(String.join(" • ", changes));
+        update.setChangeSummary(changeSummary);
         update.setIsRead(false);
         update.setDetectedAt(nowPl);
         tenderUpdateRepository.save(update);
@@ -193,6 +222,15 @@ public class ObservedTenderUpdateService {
             observed.setSubmissionDeadline(incomingDeadline);
         }
         tenderRepository.save(observed);
+
+        List<UserTender> observers = userTenderRepository.findByTenderIdAndStatus(observed.getId(), TenderStatus.INTERESTED);
+        if (!observers.isEmpty()) {
+            for (UserTender ut : observers) {
+                ut.setHasUnreadUpdate(true);
+                ut.setUpdatedAt(nowPl);
+            }
+            userTenderRepository.saveAll(observers);
+        }
         return true;
     }
 

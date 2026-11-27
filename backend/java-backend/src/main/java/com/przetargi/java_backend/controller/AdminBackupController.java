@@ -2,6 +2,7 @@ package com.przetargi.java_backend.controller;
 
 import com.przetargi.java_backend.service.BackupService;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -20,15 +21,16 @@ public class AdminBackupController {
     }
 
     @GetMapping("/export")
-    public ResponseEntity<BackupService.ConfigBackupDto> exportConfig() {
-        return ResponseEntity.ok(backupService.exportConfig());
+    public ResponseEntity<BackupService.ConfigBackupDto> exportConfig(Authentication auth) {
+        return ResponseEntity.ok(backupService.exportConfig(auth != null ? auth.getName() : null));
     }
 
     @PostMapping("/import")
     public ResponseEntity<BackupService.ImportSummaryDto> importConfig(
-            @RequestBody BackupService.ConfigImportRequest request
+            @RequestBody BackupService.ConfigImportRequest request,
+            Authentication auth
     ) {
-        return ResponseEntity.ok(backupService.importConfig(request));
+        return ResponseEntity.ok(backupService.importConfig(request, auth != null ? auth.getName() : null));
     }
 
     @ExceptionHandler(Exception.class)

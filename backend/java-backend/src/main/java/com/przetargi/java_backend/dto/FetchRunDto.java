@@ -14,7 +14,8 @@ public record FetchRunDto(
         Integer zeroScoreCount,
         OffsetDateTime createdAt,
         String sharedByUsername,
-        String sharedNote
+        String sharedNote,
+        Boolean isRead
 ) {
     public static FetchRunDto fromEntity(FetchRun r) {
         return new FetchRunDto(
@@ -27,7 +28,8 @@ public record FetchRunDto(
                 r.getZeroScoreCount(),
                 r.getCreatedAt(),
                 r.getSharedByUsername(),
-                r.getSharedNote()
+                r.getSharedNote(),
+                Boolean.TRUE.equals(r.getIsRead())
         );
     }
 }

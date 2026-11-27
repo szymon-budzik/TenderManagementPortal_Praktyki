@@ -10,4 +10,5 @@ public interface SharedTenderRepository extends JpaRepository<SharedTender, Long
     long countByRecipientUserId(Long recipientUserId);
     long countByRecipientUserIdAndIsReadFalse(Long recipientUserId);
     List<SharedTender> findByRecipientUserIdAndIsReadFalse(Long recipientUserId);
+    boolean existsByRecipientUserIdAndTenderId(Long recipientUserId, Long tenderId);
 }

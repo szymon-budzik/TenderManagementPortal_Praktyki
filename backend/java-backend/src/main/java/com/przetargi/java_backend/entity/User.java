@@ -35,6 +35,14 @@ public class User {
     @Column(name = "is_active", nullable = false)
     private Boolean isActive;
 
+    @Builder.Default
+    @Column(name = "notify_shared_tenders", nullable = false)
+    private Boolean notifySharedTenders = true;
+
+    @Builder.Default
+    @Column(name = "notify_shared_reports", nullable = false)
+    private Boolean notifySharedReports = true;
+
     @Column(name = "created_at", insertable = false, updatable = false)
     private OffsetDateTime createdAt;
 }

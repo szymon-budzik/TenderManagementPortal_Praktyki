@@ -3,6 +3,7 @@ package com.przetargi.java_backend.service;
 import com.przetargi.java_backend.dto.AutomationProfileDto;
 import com.przetargi.java_backend.dto.AutomationProfileRequest;
 import com.przetargi.java_backend.dto.FetchRunDto;
+import com.przetargi.java_backend.dto.ReportsBadgeDto;
 import com.przetargi.java_backend.entity.AutomationProfile;
 import com.przetargi.java_backend.entity.FetchRun;
 import com.przetargi.java_backend.entity.User;
@@ -10,6 +11,9 @@ import com.przetargi.java_backend.repository.AutomationProfileRepository;
 import com.przetargi.java_backend.repository.FetchRunRepository;
 import com.przetargi.java_backend.repository.KeywordCategoryRepository;
 import com.przetargi.java_backend.repository.UserRepository;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -48,18 +52,21 @@ public class AutomationService {
     }
 
     @Transactional(readOnly = true)
-    public List<AutomationProfileDto> getProfiles() {
-        return profileRepository.findAllByOrderByIdAsc().stream()
+    public List<AutomationProfileDto> getProfiles(String username) {
+        Long userId = requireUserId(username);
+        return profileRepository.findByOwnerUserIdOrderByIdAsc(userId).stream()
                 .map(AutomationProfileDto::fromEntity)
                 .toList();
     }
 
     @Transactional
-    public AutomationProfileDto createProfile(AutomationProfileRequest incoming) {
+    public AutomationProfileDto createProfile(AutomationProfileRequest incoming, String username) {
+        Long userId = requireUserId(username);
         if (incoming.name() == null || incoming.name().isBlank()) {
             throw new IllegalArgumentException("Nazwa profilu jest wymagana.");
         }
         AutomationProfile p = new AutomationProfile();
+        p.setOwnerUserId(userId);
         p.setName(incoming.name().trim());
         p.setEnabled(Boolean.TRUE.equals(incoming.enabled()));
         p.setScheduleType(incoming.scheduleType() != null ? incoming.scheduleType() : "DAILY");
@@ -85,9 +92,9 @@ public class AutomationService {
     }
 
     @Transactional
-    public AutomationProfileDto updateProfile(Long id, AutomationProfileRequest incoming) {
-        AutomationProfile p = profileRepository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("Nie znaleziono profilu o ID: " + id));
+    public AutomationProfileDto updateProfile(Long id, AutomationProfileRequest incoming, String username) {
+        Long userId = requireUserId(username);
+        AutomationProfile p = requireOwnedProfile(id, userId);
 
         if (incoming.name() != null && !incoming.name().isBlank()) {
             p.setName(incoming.name().trim());
@@ -142,41 +149,58 @@ public class AutomationService {
     }
 
     @Transactional
-    public void deleteProfile(Long id) {
-        if (profileRepository.existsById(id)) {
-            profileRepository.deleteById(id);
-        }
+    public void deleteProfile(Long id, String username) {
+        Long userId = requireUserId(username);
+        AutomationProfile p = requireOwnedProfile(id, userId);
+        profileRepository.deleteById(p.getId());
     }
 
-    public TenderExecutionService.ExecutionSummary triggerProfileNow(Long id) {
+    public TenderExecutionService.ExecutionSummary triggerProfileNow(Long id, String username) {
+        Long userId = requireUserId(username);
+        requireOwnedProfile(id, userId);
         return executionService.executeProfileNow(id, false);
     }
 
     @Transactional(readOnly = true)
     public List<FetchRunDto> getRuns(String username) {
-        Long userId = (username == null || username.isBlank())
-                ? null
-                : userRepository.findByUsername(username).map(User::getId).orElse(null);
-
-        List<FetchRun> runs = userId != null
-                ? fetchRunRepository.findByTargetUserIdIsNullOrTargetUserIdOrderByCreatedAtDesc(userId)
-                : fetchRunRepository.findByTargetUserIdIsNullOrderByCreatedAtDesc();
-
-        return runs.stream()
+        Long userId = requireUserId(username);
+        return fetchRunRepository.findByOwnerUserIdOrTargetUserIdOrderByCreatedAtDesc(userId, userId).stream()
                 .map(FetchRunDto::fromEntity)
                 .toList();
     }
 
+    @Transactional(readOnly = true)
+    public ReportsBadgeDto getReportsBadge(String username) {
+        Long userId = requireUserId(username);
+        long total = fetchRunRepository.countAccessibleByUser(userId);
+        long unread = fetchRunRepository.countUnreadAccessibleByUser(userId);
+        return new ReportsBadgeDto(total, unread);
+    }
+
     @Transactional
-    public void deleteRun(Long id) {
-        if (fetchRunRepository.existsById(id)) {
-            fetchRunRepository.deleteById(id);
+    public void markAllRunsRead(String username) {
+        Long userId = requireUserId(username);
+        List<FetchRun> unread = fetchRunRepository.findUnreadAccessibleByUser(userId);
+        if (!unread.isEmpty()) {
+            unread.forEach(r -> r.setIsRead(true));
+            fetchRunRepository.saveAll(unread);
         }
     }
 
-    public TenderExecutionService.ExcelExportResult exportRunsToExcel(List<Long> runIds) throws Exception {
+    @Transactional
+    public void deleteRun(Long id, String username) {
+        Long userId = requireUserId(username);
+        FetchRun run = requireAccessibleRun(id, userId);
+        fetchRunRepository.deleteById(run.getId());
+    }
+
+    public TenderExecutionService.ExcelExportResult exportRunsToExcel(List<Long> runIds, String username) throws Exception {
         if (runIds == null || runIds.isEmpty()) {
             throw new IllegalArgumentException("Zaznacz przynajmniej jedno pobranie z listy.");
+        }
+        Long userId = requireUserId(username);
+        for (Long runId : runIds) {
+            requireAccessibleRun(runId, userId);
         }
         return reportExportService.generateExcelForRuns(runIds);
     }
@@ -184,10 +208,15 @@ public class AutomationService {
     public TenderExecutionService.EmailDispatchResult sendRunsByEmail(
             List<Long> runIds,
             String rawEmails,
-            Long smtpAccountId
+            Long smtpAccountId,
+            String username
     ) throws Exception {
         if (runIds == null || runIds.isEmpty()) {
             throw new IllegalArgumentException("Zaznacz przynajmniej jedno pobranie z listy.");
+        }
+        Long userId = requireUserId(username);
+        for (Long runId : runIds) {
+            requireAccessibleRun(runId, userId);
         }
         List<String> emails = reportEmailService.parseEmails(rawEmails);
         if (emails.isEmpty()) {
@@ -199,5 +228,41 @@ public class AutomationService {
                 "Raport przetargow z wybranych pobran",
                 smtpAccountId
         );
+    }
+
+    private AutomationProfile requireOwnedProfile(Long id, Long userId) {
+        AutomationProfile p = profileRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Nie znaleziono profilu o ID: " + id));
+        if (!userId.equals(p.getOwnerUserId())) {
+            throw new AccessDeniedException("Brak dostępu do profilu automatyzacji innego użytkownika.");
+        }
+        return p;
+    }
+
+    private FetchRun requireAccessibleRun(Long id, Long userId) {
+        FetchRun run = fetchRunRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Nie znaleziono raportu o ID: " + id));
+        boolean allowed = userId.equals(run.getOwnerUserId()) || userId.equals(run.getTargetUserId());
+        if (!allowed) {
+            throw new AccessDeniedException("Brak dostępu do raportu innego użytkownika.");
+        }
+        return run;
+    }
+
+    private Long requireUserId(String username) {
+        String effectiveUsername = username;
+        if (effectiveUsername == null || effectiveUsername.isBlank()) {
+            Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+            if (auth != null && auth.isAuthenticated() && !"anonymousUser".equals(auth.getPrincipal())) {
+                effectiveUsername = auth.getName();
+            }
+        }
+        if (effectiveUsername == null || effectiveUsername.isBlank()) {
+            throw new AccessDeniedException("Brak uwierzytelnionego użytkownika.");
+        }
+        String lookup = effectiveUsername;
+        return userRepository.findByUsername(lookup)
+                .map(User::getId)
+                .orElseThrow(() -> new AccessDeniedException("Nie znaleziono użytkownika: " + lookup));
     }
 }

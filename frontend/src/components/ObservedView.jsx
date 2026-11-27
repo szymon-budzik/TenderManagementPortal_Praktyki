@@ -185,6 +185,7 @@ export default function ObservedView() {
       });
       handleClearSelection();
       setReportName('');
+      window.dispatchEvent(new Event('reportsUpdated'));
     } catch (err) {
       setReportFeedback({
         success: false,

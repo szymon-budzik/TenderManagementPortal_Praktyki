@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { FileSpreadsheet, CheckCircle2, X } from 'lucide-react';
+import { FileSpreadsheet, CheckCircle2, X, Bell, BellOff } from 'lucide-react';
 import ConfirmModal from './ConfirmModal';
 import ShareModal from './ShareModal';
 import ReportsDispatchBar from './reports/ReportsDispatchBar';
@@ -8,9 +8,12 @@ import { downloadBase64Excel } from './reports/reportUtils';
 import {
   deleteRun,
   exportRunsExcel,
+  getNotificationPreferences,
   getRuns,
   getSmtpAccounts,
+  markAllRunsRead,
   sendRunsEmail,
+  updateNotificationPreferences,
 } from '../services/automationApi';
 import { RESOURCE_TYPES } from '../rolesStore';
 import { useAccessibleResources } from '../hooks/useAccessibleResources';
@@ -27,6 +30,8 @@ export default function ReportsView() {
   const [loadingAction, setLoadingAction] = useState(false);
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [shareFeedback, setShareFeedback] = useState('');
+  const [notificationsEnabled, setNotificationsEnabled] = useState(true);
+  const [savingNotifPref, setSavingNotifPref] = useState(false);
 
   const { confirmDialog, openConfirm, closeConfirm } = useConfirmDialog();
   const { toggleSort, sortedItems: sortedRuns } = useSort(runs, { key: 'id', dir: 'desc' });
@@ -46,6 +51,13 @@ export default function ReportsView() {
       ]);
       setRuns(runsData);
       setAllSmtpAccounts(smtpData);
+      if (runsData.some((r) => r.isRead === false)) {
+        markAllRunsRead()
+          .then(() => window.dispatchEvent(new Event('reportsUpdated')))
+          .catch(() => {});
+      } else {
+        window.dispatchEvent(new Event('reportsUpdated'));
+      }
     } catch (err) {
       console.error('Błąd pobierania raportów:', err);
     }
@@ -55,6 +67,11 @@ export default function ReportsView() {
     try {
       const data = await getRuns();
       setRuns(data);
+      if (data.some((r) => r.isRead === false)) {
+        markAllRunsRead()
+          .then(() => window.dispatchEvent(new Event('reportsUpdated')))
+          .catch(() => {});
+      }
     } catch {
       // Ciche odświeżanie w tle co 10s
     }
@@ -62,11 +79,23 @@ export default function ReportsView() {
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([getRuns().catch(() => []), getSmtpAccounts().catch(() => [])])
-      .then(([runsData, smtpData]) => {
+    Promise.all([
+      getRuns().catch(() => []),
+      getSmtpAccounts().catch(() => []),
+      getNotificationPreferences().catch(() => null),
+    ])
+      .then(([runsData, smtpData, prefs]) => {
         if (cancelled) return;
         setRuns(runsData);
         setAllSmtpAccounts(smtpData);
+        if (prefs && typeof prefs.sharedReportsEnabled === 'boolean') {
+          setNotificationsEnabled(prefs.sharedReportsEnabled);
+        }
+        if (runsData.some((r) => r.isRead === false)) {
+          markAllRunsRead()
+            .then(() => window.dispatchEvent(new Event('reportsUpdated')))
+            .catch(() => {});
+        }
       })
       .catch((err) => {
         console.error('Błąd pobierania raportów:', err);
@@ -75,6 +104,22 @@ export default function ReportsView() {
       cancelled = true;
     };
   }, []);
+
+  const handleToggleNotifications = async (checked) => {
+    setNotificationsEnabled(checked);
+    setSavingNotifPref(true);
+    try {
+      const updated = await updateNotificationPreferences({ sharedReportsEnabled: checked });
+      if (updated && typeof updated.sharedReportsEnabled === 'boolean') {
+        setNotificationsEnabled(updated.sharedReportsEnabled);
+      }
+    } catch (err) {
+      setNotificationsEnabled(!checked);
+      console.error('Błąd zapisu ustawień powiadomień raportów:', err);
+    } finally {
+      setSavingNotifPref(false);
+    }
+  };
 
   usePolling(refreshRunsQuietly, 10000);
 
@@ -151,13 +196,31 @@ export default function ReportsView() {
         }}
       />
 
-      <div>
-        <h2 className="text-2xl font-extrabold text-black">
-          Raporty Excel i Ręczna Wysyłka E-mail
-        </h2>
-        <p className="text-sm font-medium text-black mt-1">
-          Zaznacz jedno lub kilka pobrań z listy poniżej, aby pobrać arkusz Excel (.xlsx) lub wysłać go na wskazane adresy e-mail.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-extrabold text-black">
+            Raporty Excel i Ręczna Wysyłka E-mail
+          </h2>
+          <p className="text-sm font-medium text-black mt-1">
+            Zaznacz jedno lub kilka pobrań z listy poniżej, aby pobrać arkusz Excel (.xlsx) lub wysłać go na wskazane adresy e-mail.
+          </p>
+        </div>
+
+        <label className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white border-2 border-blue-300 hover:border-blue-500 text-xs font-extrabold text-black cursor-pointer select-none shadow-xs transition shrink-0">
+          <input
+            type="checkbox"
+            checked={notificationsEnabled}
+            disabled={savingNotifPref}
+            onChange={(e) => handleToggleNotifications(e.target.checked)}
+            className="w-4 h-4 accent-blue-600 cursor-pointer"
+          />
+          {notificationsEnabled ? (
+            <Bell size={15} className="text-blue-600 shrink-0" />
+          ) : (
+            <BellOff size={15} className="text-slate-500 shrink-0" />
+          )}
+          <span>Powiadomienia o przesłanych raportach</span>
+        </label>
       </div>
 
       <div className="bg-white p-6 rounded-xl border-2 border-blue-600 shadow-xs space-y-5">

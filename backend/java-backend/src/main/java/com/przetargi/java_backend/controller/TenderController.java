@@ -11,8 +11,11 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -111,6 +114,17 @@ public class TenderController {
                 : ResponseEntity.notFound().build();
     }
 
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ErrorMessage> handleAccessDenied(AccessDeniedException ex) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(new ErrorMessage(ex.getMessage()));
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ErrorMessage> handleBadRequest(IllegalArgumentException ex) {
+        return ResponseEntity.badRequest().body(new ErrorMessage(ex.getMessage()));
+    }
+
+    public record ErrorMessage(String message) {}
     public record StatusUpdateRequest(TenderStatus status) {}
     public record DeadlineUpdateRequest(String submissionDeadline) {}
     public record CreateObservedReportRequest(List<Long> tenderIds, List<Long> updateIds, String reportName) {}

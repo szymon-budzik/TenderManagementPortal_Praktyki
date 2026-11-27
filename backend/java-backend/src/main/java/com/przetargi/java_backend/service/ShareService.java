@@ -19,6 +19,7 @@ public class ShareService {
     private final AppGroupMemberRepository groupMemberRepository;
     private final UserRepository userRepository;
     private final TenderRepository tenderRepository;
+    private final UserTenderRepository userTenderRepository;
     private final FetchRunRepository fetchRunRepository;
     private final AutomationNotificationService notificationService;
     private final TenderDateService dateService;
@@ -29,6 +30,7 @@ public class ShareService {
             AppGroupMemberRepository groupMemberRepository,
             UserRepository userRepository,
             TenderRepository tenderRepository,
+            UserTenderRepository userTenderRepository,
             FetchRunRepository fetchRunRepository,
             AutomationNotificationService notificationService,
             TenderDateService dateService
@@ -38,6 +40,7 @@ public class ShareService {
         this.groupMemberRepository = groupMemberRepository;
         this.userRepository = userRepository;
         this.tenderRepository = tenderRepository;
+        this.userTenderRepository = userTenderRepository;
         this.fetchRunRepository = fetchRunRepository;
         this.notificationService = notificationService;
         this.dateService = dateService;
@@ -62,6 +65,10 @@ public class ShareService {
 
         Map<Long, Tender> tendersById = tenderRepository.findAllById(tenderIds).stream()
                 .collect(Collectors.toMap(Tender::getId, Function.identity()));
+        Map<Long, UserTender> myUserTendersByTenderId = userTenderRepository
+                .findByUserIdAndTenderIdIn(currentUser.getId(), tenderIds)
+                .stream()
+                .collect(Collectors.toMap(ut -> ut.getTender().getId(), Function.identity()));
         Map<Long, User> sendersById = userRepository.findAllById(senderIds).stream()
                 .collect(Collectors.toMap(User::getId, Function.identity()));
 
@@ -73,6 +80,10 @@ public class ShareService {
             }
             User sender = sendersById.get(st.getSenderUserId());
             String senderName = sender != null ? sender.getUsername() : "Użytkownik #" + st.getSenderUserId();
+            UserTender myUt = myUserTendersByTenderId.get(tender.getId());
+            TenderResponseDto tenderDto = myUt != null
+                    ? TenderResponseDto.fromUserTender(myUt)
+                    : TenderResponseDto.fromCatalogForRecipient(tender);
             result.add(new SharedTenderDto(
                     st.getId(),
                     st.getTenderId(),
@@ -81,7 +92,7 @@ public class ShareService {
                     st.getNote(),
                     Boolean.TRUE.equals(st.getIsRead()),
                     st.getCreatedAt(),
-                    tender
+                    tenderDto
             ));
         }
         return result;
@@ -262,6 +273,7 @@ public class ShareService {
         run.setExcludedCount(0);
         run.setZeroScoreCount(0);
         run.setCreatedAt(dateService.nowPoland());
+        run.setOwnerUserId(currentUser.getId());
         run.setTargetUserId(currentUser.getId());
         run.setSharedByUsername(senderNames.size() == 1 ? senderNames.get(0) : String.join(", ", senderNames));
         run.setTenders(new ArrayList<>(tenders));
@@ -301,7 +313,8 @@ public class ShareService {
         }
 
         List<FetchRun> sourceRuns = fetchRunRepository.findAllById(runIds).stream()
-                .filter(r -> r.getTargetUserId() == null || r.getTargetUserId().equals(sender.getId()))
+                .filter(r -> sender.getId().equals(r.getOwnerUserId())
+                        || sender.getId().equals(r.getTargetUserId()))
                 .toList();
         if (sourceRuns.isEmpty()) {
             throw new IllegalArgumentException("Nie znaleziono wybranych raportów.");
@@ -324,6 +337,7 @@ public class ShareService {
                 copy.setExcludedCount(src.getExcludedCount());
                 copy.setZeroScoreCount(src.getZeroScoreCount());
                 copy.setCreatedAt(nowPl);
+                copy.setOwnerUserId(recipientId);
                 copy.setTargetUserId(recipientId);
                 copy.setSharedByUsername(sender.getUsername());
                 copy.setSharedNote(note);

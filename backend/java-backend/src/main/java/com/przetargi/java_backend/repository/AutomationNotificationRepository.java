@@ -7,9 +7,6 @@ import java.util.List;
 
 public interface AutomationNotificationRepository extends JpaRepository<AutomationNotification, Long> {
     List<AutomationNotification> findTop50ByOrderByCreatedAtDesc();
-    List<AutomationNotification> findTop50ByRecipientUserIdIsNullOrderByCreatedAtDesc();
-    List<AutomationNotification> findTop50ByRecipientUserIdIsNullOrRecipientUserIdOrderByCreatedAtDesc(Long recipientUserId);
-    List<AutomationNotification> findByIsReadFalse();
-    List<AutomationNotification> findByIsReadFalseAndRecipientUserIdIsNull();
+    List<AutomationNotification> findTop50ByRecipientUserIdOrderByCreatedAtDesc(Long recipientUserId);
     List<AutomationNotification> findByIsReadFalseAndRecipientUserId(Long recipientUserId);
 }

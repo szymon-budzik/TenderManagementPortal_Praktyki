@@ -233,6 +233,7 @@ export default function AutomationView() {
       console.error('Błąd uruchamiania profilu:', err);
     } finally {
       window.dispatchEvent(new Event('notificationsUpdated'));
+      window.dispatchEvent(new Event('reportsUpdated'));
       setLoadingAction(false);
     }
   };

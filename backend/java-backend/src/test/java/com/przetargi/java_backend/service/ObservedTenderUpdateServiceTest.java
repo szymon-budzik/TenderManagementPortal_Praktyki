@@ -2,10 +2,12 @@ package com.przetargi.java_backend.service;
 
 import com.przetargi.java_backend.entity.Tender;
 import com.przetargi.java_backend.entity.TenderUpdate;
+import com.przetargi.java_backend.entity.UserTender;
 import com.przetargi.java_backend.entity.enums.TenderStatus;
 import com.przetargi.java_backend.repository.ApiEndpointRepository;
 import com.przetargi.java_backend.repository.TenderRepository;
 import com.przetargi.java_backend.repository.TenderUpdateRepository;
+import com.przetargi.java_backend.repository.UserTenderRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -31,6 +33,8 @@ class ObservedTenderUpdateServiceTest {
     @Mock
     private TenderRepository tenderRepository;
     @Mock
+    private UserTenderRepository userTenderRepository;
+    @Mock
     private TenderUpdateRepository tenderUpdateRepository;
     @Mock
     private ApiEndpointRepository endpointRepository;
@@ -44,6 +48,7 @@ class ObservedTenderUpdateServiceTest {
         TenderSourceFetchService sourceFetchService = new TenderSourceFetchService(dateService);
         updateService = new ObservedTenderUpdateService(
                 tenderRepository,
+                userTenderRepository,
                 tenderUpdateRepository,
                 endpointRepository,
                 sourceFetchService,
@@ -89,7 +94,15 @@ class ObservedTenderUpdateServiceTest {
                 .hasUnreadUpdate(false)
                 .build();
 
+        UserTender observer = new UserTender();
+        observer.setId(1L);
+        observer.setUserId(7L);
+        observer.setTender(observed);
+        observer.setStatus(TenderStatus.INTERESTED);
+        observer.setHasUnreadUpdate(false);
+
         when(tenderUpdateRepository.findByTenderIdOrderByVersionNumberDesc(42L)).thenReturn(List.of());
+        when(userTenderRepository.findByTenderIdAndStatus(42L, TenderStatus.INTERESTED)).thenReturn(List.of(observer));
 
         boolean recorded = updateService.recordObservedUpdateIfChanged(
                 observed,
@@ -103,6 +116,7 @@ class ObservedTenderUpdateServiceTest {
 
         assertTrue(recorded);
         assertTrue(observed.getHasUnreadUpdate());
+        assertTrue(observer.getHasUnreadUpdate());
         assertEquals(now, observed.getLastUpdatedAt());
 
         ArgumentCaptor<TenderUpdate> captor = ArgumentCaptor.forClass(TenderUpdate.class);
@@ -113,6 +127,7 @@ class ObservedTenderUpdateServiceTest {
         assertEquals(newDeadline, savedUpdate.getSubmissionDeadline());
         assertTrue(savedUpdate.getChangeSummary().contains("Zmiana terminu składania ofert"));
         verify(tenderRepository).save(observed);
+        verify(userTenderRepository).saveAll(List.of(observer));
     }
 
     @Test

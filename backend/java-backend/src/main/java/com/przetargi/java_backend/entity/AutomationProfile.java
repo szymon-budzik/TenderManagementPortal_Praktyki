@@ -65,6 +65,9 @@ public class AutomationProfile {
     @Column(name = "use_category_query", nullable = false)
     private Boolean useCategoryQuery = false;
 
+    @Column(name = "owner_user_id")
+    private Long ownerUserId;
+
     public AutomationProfile() {
     }
 
@@ -118,4 +121,7 @@ public class AutomationProfile {
 
     public Boolean getUseCategoryQuery() { return useCategoryQuery; }
     public void setUseCategoryQuery(Boolean useCategoryQuery) { this.useCategoryQuery = useCategoryQuery; }
+
+    public Long getOwnerUserId() { return ownerUserId; }
+    public void setOwnerUserId(Long ownerUserId) { this.ownerUserId = ownerUserId; }
 }

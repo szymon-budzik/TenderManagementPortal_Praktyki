@@ -24,23 +24,35 @@ public class BackupService {
     private final AutomationProfileRepository profileRepository;
     private final SmtpAccountRepository smtpAccountRepository;
     private final TenderDateService dateService;
+    private final CurrentUserService currentUserService;
 
     public BackupService(
             ApiEndpointRepository endpointRepository,
             KeywordCategoryRepository keywordCategoryRepository,
             AutomationProfileRepository profileRepository,
             SmtpAccountRepository smtpAccountRepository,
-            TenderDateService dateService
+            TenderDateService dateService,
+            CurrentUserService currentUserService
     ) {
         this.endpointRepository = endpointRepository;
         this.keywordCategoryRepository = keywordCategoryRepository;
         this.profileRepository = profileRepository;
         this.smtpAccountRepository = smtpAccountRepository;
         this.dateService = dateService;
+        this.currentUserService = currentUserService;
     }
 
     @Transactional(readOnly = true)
     public ConfigBackupDto exportConfig() {
+        return exportConfig(null);
+    }
+
+    @Transactional(readOnly = true)
+    public ConfigBackupDto exportConfig(String username) {
+        Long ownerUserId = currentUserService.resolveUserId(username)
+                .or(() -> currentUserService.findFallbackAdminId())
+                .orElse(null);
+
         List<EndpointBackupDto> endpoints = endpointRepository.findAll().stream()
                 .sorted(Comparator.comparing(e -> e.getId() != null ? e.getId() : 0L))
                 .map(e -> new EndpointBackupDto(
@@ -68,7 +80,11 @@ public class BackupService {
                 ))
                 .toList();
 
-        List<AutomationProfileBackupDto> profiles = profileRepository.findAllByOrderByIdAsc().stream()
+        List<AutomationProfile> sourceProfiles = ownerUserId != null
+                ? profileRepository.findByOwnerUserIdOrderByIdAsc(ownerUserId)
+                : profileRepository.findAllByOrderByIdAsc();
+
+        List<AutomationProfileBackupDto> profiles = sourceProfiles.stream()
                 .map(p -> new AutomationProfileBackupDto(
                         p.getName(),
                         p.getEnabled(),
@@ -98,15 +114,28 @@ public class BackupService {
 
     @Transactional
     public ImportSummaryDto importConfig(ConfigImportRequest request) {
+        return importConfig(request, null);
+    }
+
+    @Transactional
+    public ImportSummaryDto importConfig(ConfigImportRequest request, String username) {
         if (request == null || request.backup() == null) {
             throw new IllegalArgumentException("Brak danych konfiguracji do zaimportowania.");
         }
+
+        Long ownerUserId = currentUserService.resolveUserId(username)
+                .or(() -> currentUserService.findFallbackAdminId())
+                .orElse(null);
 
         ConfigBackupDto backup = request.backup();
         boolean replaceMode = "REPLACE".equalsIgnoreCase(request.mode());
 
         if (replaceMode) {
-            profileRepository.deleteAll();
+            if (ownerUserId != null) {
+                profileRepository.deleteAll(profileRepository.findByOwnerUserIdOrderByIdAsc(ownerUserId));
+            } else {
+                profileRepository.deleteAll();
+            }
             keywordCategoryRepository.deleteAll();
             endpointRepository.deleteAll();
             profileRepository.flush();
@@ -129,7 +158,10 @@ public class BackupService {
         }
 
         Map<String, AutomationProfile> existingProfilesByName = new HashMap<>();
-        for (AutomationProfile p : profileRepository.findAll()) {
+        List<AutomationProfile> existingProfiles = ownerUserId != null
+                ? profileRepository.findByOwnerUserIdOrderByIdAsc(ownerUserId)
+                : profileRepository.findAll();
+        for (AutomationProfile p : existingProfiles) {
             if (p.getName() != null) {
                 existingProfilesByName.put(p.getName().trim().toLowerCase(), p);
             }
@@ -222,6 +254,9 @@ public class BackupService {
                 boolean isNew = (entity == null);
                 if (entity == null) {
                     entity = new AutomationProfile();
+                    entity.setOwnerUserId(ownerUserId);
+                } else if (entity.getOwnerUserId() == null) {
+                    entity.setOwnerUserId(ownerUserId);
                 }
 
                 entity.setName(dto.name().trim());

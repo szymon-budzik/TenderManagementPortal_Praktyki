@@ -1,12 +1,15 @@
 package com.przetargi.java_backend.service;
 
+import com.przetargi.java_backend.dto.TenderResponseDto;
 import com.przetargi.java_backend.entity.FetchRun;
 import com.przetargi.java_backend.entity.SmtpAccount;
 import com.przetargi.java_backend.entity.Tender;
 import com.przetargi.java_backend.entity.TenderUpdate;
+import com.przetargi.java_backend.entity.UserTender;
 import com.przetargi.java_backend.repository.FetchRunRepository;
 import com.przetargi.java_backend.repository.TenderRepository;
 import com.przetargi.java_backend.repository.TenderUpdateRepository;
+import com.przetargi.java_backend.repository.UserTenderRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.json.JsonParserFactory;
 import org.springframework.stereotype.Service;
@@ -18,11 +21,13 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 @Service
 public class ReportExportService {
@@ -31,6 +36,7 @@ public class ReportExportService {
 
     private final FetchRunRepository fetchRunRepository;
     private final TenderRepository tenderRepository;
+    private final UserTenderRepository userTenderRepository;
     private final TenderUpdateRepository tenderUpdateRepository;
     private final KeywordMatchingService keywordMatchingService;
     private final TenderDateService dateService;
@@ -42,12 +48,14 @@ public class ReportExportService {
     public ReportExportService(
             FetchRunRepository fetchRunRepository,
             TenderRepository tenderRepository,
+            UserTenderRepository userTenderRepository,
             TenderUpdateRepository tenderUpdateRepository,
             KeywordMatchingService keywordMatchingService,
             TenderDateService dateService
     ) {
         this.fetchRunRepository = fetchRunRepository;
         this.tenderRepository = tenderRepository;
+        this.userTenderRepository = userTenderRepository;
         this.tenderUpdateRepository = tenderUpdateRepository;
         this.keywordMatchingService = keywordMatchingService;
         this.dateService = dateService;
@@ -57,12 +65,48 @@ public class ReportExportService {
     }
 
     public FetchRun createReportFromObserved(List<Long> tenderIds, List<Long> updateIds, String reportName) {
-        List<Tender> selectedTenders = (tenderIds != null && !tenderIds.isEmpty())
-                ? tenderRepository.findAllById(tenderIds)
-                : List.of();
-        List<TenderUpdate> selectedUpdates = (updateIds != null && !updateIds.isEmpty())
-                ? tenderUpdateRepository.findAllById(updateIds)
-                : List.of();
+        return createReportFromObserved(tenderIds, updateIds, reportName, null);
+    }
+
+    public FetchRun createReportFromObserved(
+            List<Long> tenderIds,
+            List<Long> updateIds,
+            String reportName,
+            Long ownerUserId
+    ) {
+        List<Tender> selectedTenders;
+        if (tenderIds != null && !tenderIds.isEmpty()) {
+            if (ownerUserId != null) {
+                selectedTenders = userTenderRepository.findByUserIdAndTenderIdIn(ownerUserId, tenderIds).stream()
+                        .map(UserTender::getTender)
+                        .toList();
+            } else {
+                selectedTenders = tenderRepository.findAllById(tenderIds);
+            }
+        } else {
+            selectedTenders = List.of();
+        }
+
+        List<TenderUpdate> selectedUpdates;
+        if (updateIds != null && !updateIds.isEmpty()) {
+            List<TenderUpdate> rawUpdates = tenderUpdateRepository.findAllById(updateIds);
+            if (ownerUserId != null && !rawUpdates.isEmpty()) {
+                Set<Long> updateTenderIds = rawUpdates.stream()
+                        .map(TenderUpdate::getTenderId)
+                        .collect(Collectors.toSet());
+                Set<Long> ownedTenderIds = userTenderRepository.findByUserIdAndTenderIdIn(ownerUserId, updateTenderIds)
+                        .stream()
+                        .map(ut -> ut.getTender().getId())
+                        .collect(Collectors.toSet());
+                selectedUpdates = rawUpdates.stream()
+                        .filter(u -> ownedTenderIds.contains(u.getTenderId()))
+                        .toList();
+            } else {
+                selectedUpdates = rawUpdates;
+            }
+        } else {
+            selectedUpdates = List.of();
+        }
 
         int totalItems = selectedTenders.size() + selectedUpdates.size();
         if (totalItems == 0) {
@@ -101,6 +145,7 @@ public class ReportExportService {
         run.setExcludedCount(0);
         run.setZeroScoreCount(0);
         run.setCreatedAt(dateService.nowPoland());
+        run.setOwnerUserId(ownerUserId);
         run.setTenders(new ArrayList<>(selectedTenders));
         run.setTenderUpdates(new LinkedHashSet<>(selectedUpdates));
 
@@ -138,23 +183,50 @@ public class ReportExportService {
     ) {
         Map<Long, Tender> uniqueTenders = new LinkedHashMap<>();
         Map<Long, String> runLabels = new LinkedHashMap<>();
+        Map<Long, Long> tenderOwnerById = new HashMap<>();
         Map<Long, TenderUpdate> uniqueUpdates = new LinkedHashMap<>();
         Map<Long, String> updateRunLabels = new LinkedHashMap<>();
+        Map<Long, Long> updateOwnerById = new HashMap<>();
 
         for (FetchRun run : runs) {
             String label = "#" + run.getId() + " (" + run.getSourceType() + ")";
+            Long runOwnerId = run.getOwnerUserId() != null ? run.getOwnerUserId() : run.getTargetUserId();
             if (run.getTenders() != null) {
                 for (Tender t : run.getTenders()) {
                     uniqueTenders.put(t.getId(), t);
                     runLabels.put(t.getId(), label);
+                    if (runOwnerId != null) {
+                        tenderOwnerById.put(t.getId(), runOwnerId);
+                    }
                 }
             }
             if (run.getTenderUpdates() != null) {
                 for (TenderUpdate u : run.getTenderUpdates()) {
                     uniqueUpdates.put(u.getId(), u);
                     updateRunLabels.put(u.getId(), label + " — Akt. v" + u.getVersionNumber());
+                    if (runOwnerId != null) {
+                        updateOwnerById.put(u.getId(), runOwnerId);
+                    }
                 }
             }
+        }
+
+        // Batch-load UserTender rows per owner so exported score/breakdown/status match the user's workspace
+        Map<Long, Map<Long, UserTender>> userTendersByOwner = new HashMap<>();
+        Map<Long, Set<Long>> tenderIdsByOwner = new HashMap<>();
+        tenderOwnerById.forEach((tid, uid) -> tenderIdsByOwner.computeIfAbsent(uid, k -> new LinkedHashSet<>()).add(tid));
+        for (TenderUpdate u : uniqueUpdates.values()) {
+            Long uid = updateOwnerById.get(u.getId());
+            if (uid != null && u.getTenderId() != null) {
+                tenderIdsByOwner.computeIfAbsent(uid, k -> new LinkedHashSet<>()).add(u.getTenderId());
+            }
+        }
+        for (Map.Entry<Long, Set<Long>> entry : tenderIdsByOwner.entrySet()) {
+            Map<Long, UserTender> map = new HashMap<>();
+            for (UserTender ut : userTenderRepository.findByUserIdAndTenderIdIn(entry.getKey(), entry.getValue())) {
+                map.put(ut.getTender().getId(), ut);
+            }
+            userTendersByOwner.put(entry.getKey(), map);
         }
 
         StringBuilder sb = new StringBuilder("{\"tenders\":[");
@@ -163,7 +235,24 @@ public class ReportExportService {
         for (Tender t : uniqueTenders.values()) {
             if (!first) sb.append(",");
             first = false;
-            String desc = t.getDescription() != null ? t.getDescription() : "";
+            Long ownerId = tenderOwnerById.get(t.getId());
+            UserTender ut = ownerId != null
+                    ? userTendersByOwner.getOrDefault(ownerId, Map.of()).get(t.getId())
+                    : null;
+
+            int score = (ut != null && ut.getScore() != null)
+                    ? ut.getScore()
+                    : (t.getScore() != null ? t.getScore() : 0);
+            String status = (ut != null && ut.getStatus() != null)
+                    ? ut.getStatus().name()
+                    : (t.getStatus() != null ? t.getStatus().name() : "NEW");
+            String breakdown = (ut != null && ut.getScoreBreakdown() != null && !ut.getScoreBreakdown().isBlank())
+                    ? stripBreakdownPrefix(ut.getScoreBreakdown())
+                    : keywordMatchingService.extractScoreBreakdown(t);
+            String desc = ut != null
+                    ? TenderResponseDto.mergeBreakdownWithDescription(ut.getScoreBreakdown(), t.getDescription())
+                    : (t.getDescription() != null ? t.getDescription() : "");
+
             if (t.getSubmissionDeadline() != null && !desc.toLowerCase().contains("termin składania ofert:")) {
                 desc = "Termin składania ofert: "
                         + dateService.formatPolandDateTime(t.getSubmissionDeadline())
@@ -172,9 +261,9 @@ public class ReportExportService {
             sb.append("{")
                     .append("\"externalId\":\"").append(escapeJson(t.getExternalId())).append("\",")
                     .append("\"title\":\"").append(escapeJson(t.getTitle())).append("\",")
-                    .append("\"score\":").append(t.getScore() != null ? t.getScore() : 0).append(",")
-                    .append("\"scoreBreakdown\":\"").append(escapeJson(keywordMatchingService.extractScoreBreakdown(t))).append("\",")
-                    .append("\"status\":\"").append(t.getStatus() != null ? t.getStatus().name() : "NEW").append("\",")
+                    .append("\"score\":").append(score).append(",")
+                    .append("\"scoreBreakdown\":\"").append(escapeJson(breakdown)).append("\",")
+                    .append("\"status\":\"").append(status).append("\",")
                     .append("\"publicationDate\":\"").append(t.getPublicationDate() != null ? t.getPublicationDate().toString() : "").append("\",")
                     .append("\"runInfo\":\"").append(escapeJson(runLabels.getOrDefault(t.getId(), ""))).append("\",")
                     .append("\"description\":\"").append(escapeJson(desc)).append("\"")
@@ -185,11 +274,20 @@ public class ReportExportService {
             if (!first) sb.append(",");
             first = false;
             Tender parent = tenderRepository.findById(u.getTenderId()).orElse(null);
+            Long ownerId = updateOwnerById.get(u.getId());
+            UserTender ut = (ownerId != null && u.getTenderId() != null)
+                    ? userTendersByOwner.getOrDefault(ownerId, Map.of()).get(u.getTenderId())
+                    : null;
+
             String extId = (u.getExternalId() != null && !u.getExternalId().isBlank())
                     ? u.getExternalId()
                     : (parent != null ? parent.getExternalId() : "UPD-" + u.getId());
-            int score = (parent != null && parent.getScore() != null) ? parent.getScore() : 0;
-            String breakdown = parent != null ? keywordMatchingService.extractScoreBreakdown(parent) : "0 pkt";
+            int score = (ut != null && ut.getScore() != null)
+                    ? ut.getScore()
+                    : ((parent != null && parent.getScore() != null) ? parent.getScore() : 0);
+            String breakdown = (ut != null && ut.getScoreBreakdown() != null && !ut.getScoreBreakdown().isBlank())
+                    ? stripBreakdownPrefix(ut.getScoreBreakdown())
+                    : (parent != null ? keywordMatchingService.extractScoreBreakdown(parent) : "0 pkt");
 
             StringBuilder updDesc = new StringBuilder();
             if (u.getChangeSummary() != null && !u.getChangeSummary().isBlank()) {
@@ -236,6 +334,15 @@ public class ReportExportService {
             }
         }
         return sb.append("}").toString();
+    }
+
+    private String stripBreakdownPrefix(String breakdown) {
+        if (breakdown == null) return "";
+        String trimmed = breakdown.trim();
+        if (trimmed.startsWith("Punktacja kategorii:")) {
+            return trimmed.substring("Punktacja kategorii:".length()).trim();
+        }
+        return trimmed;
     }
 
     private String extractSourceLabel(String desc) {

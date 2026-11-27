@@ -17,6 +17,7 @@ export default function LoginView({ onLoginSuccess }) {
       localStorage.setItem('token', res.data.token);
       localStorage.setItem('username', res.data.username);
       localStorage.setItem('role', res.data.role);
+      localStorage.removeItem('activeTab');
       onLoginSuccess(res.data);
     } catch {
       setError('Nieprawidłowy login lub hasło.');

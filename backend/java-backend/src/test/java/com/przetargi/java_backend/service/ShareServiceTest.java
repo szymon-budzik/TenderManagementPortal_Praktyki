@@ -30,6 +30,7 @@ class ShareServiceTest {
     @Mock private AppGroupMemberRepository groupMemberRepository;
     @Mock private UserRepository userRepository;
     @Mock private TenderRepository tenderRepository;
+    @Mock private UserTenderRepository userTenderRepository;
     @Mock private FetchRunRepository fetchRunRepository;
     @Mock private AutomationNotificationService notificationService;
     @Mock private TenderDateService dateService;
@@ -44,6 +45,7 @@ class ShareServiceTest {
                 groupMemberRepository,
                 userRepository,
                 tenderRepository,
+                userTenderRepository,
                 fetchRunRepository,
                 notificationService,
                 dateService
@@ -136,6 +138,7 @@ class ShareServiceTest {
 
         FetchRun run = new FetchRun();
         run.setId(50L);
+        run.setOwnerUserId(10L);
         run.setSourceType("MANUAL");
         run.setSourcesSummary("EZamówienia");
         run.setTotalFetched(5);

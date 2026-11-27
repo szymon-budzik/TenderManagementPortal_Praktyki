@@ -12,6 +12,8 @@ import {
   CheckCircle2,
   AlertCircle,
   X,
+  Bell,
+  BellOff,
 } from 'lucide-react';
 import ConfirmModal from './ConfirmModal';
 import TenderDetailsModal from './tenders/TenderDetailsModal';
@@ -29,6 +31,10 @@ import {
 } from '../services/sharesApi';
 import { deleteTender, updateTenderStatus } from '../services/tendersApi';
 import { getKeywordCategories } from '../services/keywordsApi';
+import {
+  getNotificationPreferences,
+  updateNotificationPreferences,
+} from '../services/automationApi';
 import { useConfirmDialog } from '../hooks/useConfirmDialog';
 import { useNowTick, usePolling } from '../hooks/usePolling';
 
@@ -42,6 +48,8 @@ export default function SharedInboxView() {
   const [busyAction, setBusyAction] = useState(false);
   const [feedback, setFeedback] = useState(null);
   const [selectedTender, setSelectedTender] = useState(null);
+  const [notificationsEnabled, setNotificationsEnabled] = useState(true);
+  const [savingNotifPref, setSavingNotifPref] = useState(false);
 
   const { confirmDialog, openConfirm, closeConfirm } = useConfirmDialog();
   const nowMs = useNowTick(60000);
@@ -69,12 +77,19 @@ export default function SharedInboxView() {
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([getReceivedTenders(), getKeywordCategories().catch(() => [])])
-      .then(([received, kwData]) => {
+    Promise.all([
+      getReceivedTenders(),
+      getKeywordCategories().catch(() => []),
+      getNotificationPreferences().catch(() => null),
+    ])
+      .then(([received, kwData, prefs]) => {
         if (cancelled) return;
         const list = Array.isArray(received) ? received : [];
         setItems(list);
         setCategories(kwData);
+        if (prefs && typeof prefs.sharedTendersEnabled === 'boolean') {
+          setNotificationsEnabled(prefs.sharedTendersEnabled);
+        }
         if (list.some((item) => !item.isRead)) {
           markAllSharedTendersRead()
             .then(() => window.dispatchEvent(new Event('sharedUpdated')))
@@ -91,6 +106,22 @@ export default function SharedInboxView() {
       cancelled = true;
     };
   }, []);
+
+  const handleToggleNotifications = async (checked) => {
+    setNotificationsEnabled(checked);
+    setSavingNotifPref(true);
+    try {
+      const updated = await updateNotificationPreferences({ sharedTendersEnabled: checked });
+      if (updated && typeof updated.sharedTendersEnabled === 'boolean') {
+        setNotificationsEnabled(updated.sharedTendersEnabled);
+      }
+    } catch (err) {
+      setNotificationsEnabled(!checked);
+      console.error('Błąd zapisu ustawień powiadomień:', err);
+    } finally {
+      setSavingNotifPref(false);
+    }
+  };
 
   usePolling(fetchData, 12000);
 
@@ -194,6 +225,7 @@ export default function SharedInboxView() {
       });
       setSelectedShareIds([]);
       setReportName('');
+      window.dispatchEvent(new Event('reportsUpdated'));
     } catch (err) {
       setFeedback({
         success: false,
@@ -272,6 +304,22 @@ export default function SharedInboxView() {
             </p>
           </div>
         </div>
+
+        <label className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white border-2 border-blue-300 hover:border-blue-500 text-xs font-extrabold text-black cursor-pointer select-none shadow-xs transition shrink-0">
+          <input
+            type="checkbox"
+            checked={notificationsEnabled}
+            disabled={savingNotifPref}
+            onChange={(e) => handleToggleNotifications(e.target.checked)}
+            className="w-4 h-4 accent-blue-600 cursor-pointer"
+          />
+          {notificationsEnabled ? (
+            <Bell size={15} className="text-blue-600 shrink-0" />
+          ) : (
+            <BellOff size={15} className="text-slate-500 shrink-0" />
+          )}
+          <span>Powiadomienia o przesłanych</span>
+        </label>
       </div>
 
       {/* Pasek akcji grupowych (Raport + Obserwowane) */}

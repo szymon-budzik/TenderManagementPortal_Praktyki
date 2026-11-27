@@ -1,7 +1,5 @@
 package com.przetargi.java_backend.dto;
 
-import com.przetargi.java_backend.entity.Tender;
-
 import java.time.OffsetDateTime;
 
 public record SharedTenderDto(
@@ -12,5 +10,5 @@ public record SharedTenderDto(
         String note,
         boolean isRead,
         OffsetDateTime createdAt,
-        Tender tender
+        TenderResponseDto tender
 ) {}

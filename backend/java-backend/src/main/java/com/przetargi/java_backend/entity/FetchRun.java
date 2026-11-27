@@ -55,6 +55,12 @@ public class FetchRun {
     @Column(name = "shared_note", length = 500)
     private String sharedNote;
 
+    @Column(name = "owner_user_id")
+    private Long ownerUserId;
+
+    @Column(name = "is_read", nullable = false)
+    private Boolean isRead = false;
+
     @ManyToMany(fetch = FetchType.EAGER)
     @JoinTable(
             name = "fetch_run_tenders",
@@ -112,4 +118,10 @@ public class FetchRun {
 
     public String getSharedNote() { return sharedNote; }
     public void setSharedNote(String sharedNote) { this.sharedNote = sharedNote; }
+
+    public Long getOwnerUserId() { return ownerUserId; }
+    public void setOwnerUserId(Long ownerUserId) { this.ownerUserId = ownerUserId; }
+
+    public Boolean getIsRead() { return isRead; }
+    public void setIsRead(Boolean isRead) { this.isRead = isRead; }
 }

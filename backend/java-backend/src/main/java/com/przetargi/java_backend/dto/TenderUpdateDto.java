@@ -17,6 +17,10 @@ public record TenderUpdateDto(
         OffsetDateTime detectedAt
 ) {
     public static TenderUpdateDto fromEntity(TenderUpdate u) {
+        return fromEntity(u, Boolean.TRUE.equals(u.getIsRead()));
+    }
+
+    public static TenderUpdateDto fromEntity(TenderUpdate u, boolean isRead) {
         return new TenderUpdateDto(
                 u.getId(),
                 u.getTenderId(),
@@ -26,7 +30,7 @@ public record TenderUpdateDto(
                 u.getDescription(),
                 u.getSubmissionDeadline(),
                 u.getChangeSummary(),
-                u.getIsRead(),
+                isRead,
                 u.getDetectedAt()
         );
     }

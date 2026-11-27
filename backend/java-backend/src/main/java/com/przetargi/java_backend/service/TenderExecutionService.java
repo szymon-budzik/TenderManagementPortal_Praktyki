@@ -5,12 +5,14 @@ import com.przetargi.java_backend.entity.AutomationProfile;
 import com.przetargi.java_backend.entity.FetchRun;
 import com.przetargi.java_backend.entity.KeywordCategory;
 import com.przetargi.java_backend.entity.Tender;
+import com.przetargi.java_backend.entity.UserTender;
 import com.przetargi.java_backend.entity.enums.TenderStatus;
 import com.przetargi.java_backend.repository.ApiEndpointRepository;
 import com.przetargi.java_backend.repository.AutomationProfileRepository;
 import com.przetargi.java_backend.repository.FetchRunRepository;
 import com.przetargi.java_backend.repository.KeywordCategoryRepository;
 import com.przetargi.java_backend.repository.TenderRepository;
+import com.przetargi.java_backend.repository.UserTenderRepository;
 import org.springframework.stereotype.Service;
 
 import java.time.OffsetDateTime;
@@ -31,6 +33,7 @@ public class TenderExecutionService {
     private final ApiEndpointRepository endpointRepository;
     private final KeywordCategoryRepository keywordCategoryRepository;
     private final TenderRepository tenderRepository;
+    private final UserTenderRepository userTenderRepository;
     private final FetchRunRepository fetchRunRepository;
     private final AutomationProfileRepository profileRepository;
 
@@ -42,11 +45,13 @@ public class TenderExecutionService {
     private final ReportExportService reportExportService;
     private final ReportEmailService reportEmailService;
     private final AutomationNotificationService notificationService;
+    private final CurrentUserService currentUserService;
 
     public TenderExecutionService(
             ApiEndpointRepository endpointRepository,
             KeywordCategoryRepository keywordCategoryRepository,
             TenderRepository tenderRepository,
+            UserTenderRepository userTenderRepository,
             FetchRunRepository fetchRunRepository,
             AutomationProfileRepository profileRepository,
             TenderDateService dateService,
@@ -56,11 +61,13 @@ public class TenderExecutionService {
             ObservedTenderUpdateService observedUpdateService,
             ReportExportService reportExportService,
             ReportEmailService reportEmailService,
-            AutomationNotificationService notificationService
+            AutomationNotificationService notificationService,
+            CurrentUserService currentUserService
     ) {
         this.endpointRepository = endpointRepository;
         this.keywordCategoryRepository = keywordCategoryRepository;
         this.tenderRepository = tenderRepository;
+        this.userTenderRepository = userTenderRepository;
         this.fetchRunRepository = fetchRunRepository;
         this.profileRepository = profileRepository;
         this.dateService = dateService;
@@ -71,6 +78,7 @@ public class TenderExecutionService {
         this.reportExportService = reportExportService;
         this.reportEmailService = reportEmailService;
         this.notificationService = notificationService;
+        this.currentUserService = currentUserService;
     }
 
     public ExecutionSummary executeProfileNow(Long profileId) {
@@ -81,6 +89,9 @@ public class TenderExecutionService {
         AutomationProfile profile = profileRepository.findById(profileId)
                 .orElseThrow(() -> new IllegalArgumentException("Nie znaleziono profilu o ID: " + profileId));
         OffsetDateTime nowPl = dateService.nowPoland();
+        Long ownerUserId = profile.getOwnerUserId() != null
+                ? profile.getOwnerUserId()
+                : currentUserService.findFallbackAdminId().orElse(null);
 
         try {
             List<Long> epIds = keywordMatchingService.parseIds(profile.getEndpointIds());
@@ -104,7 +115,8 @@ public class TenderExecutionService {
                     profile.getMatchMode(),
                     catModes,
                     useQuery ? profile.getCategoryQuery() : null,
-                    "CRON [" + profile.getName() + "]"
+                    "CRON [" + profile.getName() + "]",
+                    ownerUserId
             );
 
             String statusMsg = "Zapisano: " + summary.savedCount()
@@ -187,7 +199,7 @@ public class TenderExecutionService {
     }
 
     public ExecutionSummary executeSearch(List<Long> endpointIds, List<Long> categoryIds, String matchMode, String sourceType) {
-        return executeSearch(endpointIds, categoryIds, matchMode, null, null, sourceType);
+        return executeSearch(endpointIds, categoryIds, matchMode, null, null, sourceType, null);
     }
 
     public ExecutionSummary executeSearch(
@@ -197,7 +209,7 @@ public class TenderExecutionService {
             Map<Long, String> categoryMatchModes,
             String sourceType
     ) {
-        return executeSearch(endpointIds, categoryIds, matchMode, categoryMatchModes, null, sourceType);
+        return executeSearch(endpointIds, categoryIds, matchMode, categoryMatchModes, null, sourceType, null);
     }
 
     public ExecutionSummary executeSearch(
@@ -208,6 +220,22 @@ public class TenderExecutionService {
             String categoryQuery,
             String sourceType
     ) {
+        return executeSearch(endpointIds, categoryIds, matchMode, categoryMatchModes, categoryQuery, sourceType, null);
+    }
+
+    public ExecutionSummary executeSearch(
+            List<Long> endpointIds,
+            List<Long> categoryIds,
+            String matchMode,
+            Map<Long, String> categoryMatchModes,
+            String categoryQuery,
+            String sourceType,
+            Long ownerUserId
+    ) {
+        Long effectiveUserId = ownerUserId != null
+                ? ownerUserId
+                : currentUserService.resolveUserId(null).orElse(null);
+
         String fallbackMode = (matchMode != null && !matchMode.isBlank()) ? matchMode : "OR";
         List<ApiEndpoint> selectedEndpoints = endpointRepository.findAllById(endpointIds != null ? endpointIds : List.of());
         boolean usingQuery = categoryQuery != null && !categoryQuery.isBlank();
@@ -223,7 +251,13 @@ public class TenderExecutionService {
         } else {
             selectedCategories = keywordCategoryRepository.findAllById(categoryIds != null ? categoryIds : List.of());
         }
-        List<Tender> observedTenders = tenderRepository.findByStatusOrderByIdAsc(TenderStatus.INTERESTED);
+
+        List<Tender> userObservedTenders = effectiveUserId != null
+                ? userTenderRepository.findByUserIdAndStatusOrderByIdAsc(effectiveUserId, TenderStatus.INTERESTED)
+                        .stream()
+                        .map(UserTender::getTender)
+                        .toList()
+                : List.of();
 
         int totalFetched = 0;
         int savedCount = 0;
@@ -256,9 +290,9 @@ public class TenderExecutionService {
                     OffsetDateTime submissionDeadline = item.submissionDeadline() != null
                             ? item.submissionDeadline() : dateService.extractDeadlineFromText(description);
 
-                    // Wykryj aktualizację dla już obserwowanego (INTERESTED) przetargu (niezależnie od punktacji)
+                    // Wykryj aktualizację dla już obserwowanego (INTERESTED) przetargu bieżącego użytkownika
                     Optional<Tender> matchedObserved = observedUpdateService.findMatchingObservedTender(
-                            observedTenders, externalId, groupKey, title);
+                            userObservedTenders, externalId, groupKey, title);
                     if (matchedObserved.isPresent()) {
                         if (observedUpdateService.recordObservedUpdateIfChanged(
                                 matchedObserved.get(), externalId, title, description, submissionDeadline, groupKey, nowPl)) {
@@ -292,8 +326,8 @@ public class TenderExecutionService {
                     }
 
                     String breakdownLine = "Punktacja kategorii: " + String.join(" / ", evaluation.categoryBreakdowns());
-                    String finalDesc = !description.isBlank() ? breakdownLine + "\n" + description : breakdownLine;
 
+                    // 1. Deduplikowany upsert w globalnym katalogu tenders (bez per-user punktacji w opisie!)
                     Tender tender = tenderRepository.findByExternalId(externalId).orElseGet(() -> {
                         Tender t = new Tender();
                         t.setExternalId(externalId);
@@ -302,34 +336,75 @@ public class TenderExecutionService {
                         t.setPublicationDate(nowPl);
                         return t;
                     });
-                    boolean isNewTender = (tender.getId() == null);
+                    boolean isNewCatalogTender = (tender.getId() == null);
 
-                    if (!isNewTender && tender.getStatus() == TenderStatus.INTERESTED) {
-                        if (observedUpdateService.recordObservedUpdateIfChanged(
-                                tender, externalId, title, description, submissionDeadline, groupKey, nowPl)) {
-                            epObservedUpdates++;
+                    Tender savedTender;
+                    if (isNewCatalogTender) {
+                        tender.setTitle(title);
+                        tender.setDescription(description);
+                        tender.setScore(evaluation.totalScore());
+                        if (submissionDeadline != null) tender.setSubmissionDeadline(submissionDeadline);
+                        if (groupKey != null) tender.setGroupKey(groupKey);
+                        if (tender.getHasUnreadUpdate() == null) tender.setHasUnreadUpdate(false);
+                        savedTender = tenderRepository.save(tender);
+                    } else {
+                        boolean observedByAnyone = !userTenderRepository
+                                .findByTenderIdAndStatus(tender.getId(), TenderStatus.INTERESTED)
+                                .isEmpty();
+                        if (observedByAnyone) {
+                            if (observedUpdateService.recordObservedUpdateIfChanged(
+                                    tender, externalId, title, description, submissionDeadline, groupKey, nowPl)) {
+                                epObservedUpdates++;
+                            }
+                            savedTender = tender;
+                        } else {
+                            tender.setTitle(title);
+                            if (!description.isBlank()) {
+                                tender.setDescription(description);
+                            }
+                            if (submissionDeadline != null) tender.setSubmissionDeadline(submissionDeadline);
+                            if (groupKey != null) tender.setGroupKey(groupKey);
+                            savedTender = tenderRepository.save(tender);
                         }
-                        if (savedTendersInRun.put(tender.getId(), tender) == null) {
-                            savedCount++;
-                            existingUpdatedCount++;
-                            epSaved++;
-                            epExistingUpdated++;
-                        }
-                        continue;
                     }
 
-                    tender.setTitle(title);
-                    tender.setDescription(finalDesc);
-                    tender.setScore(evaluation.totalScore());
-                    if (submissionDeadline != null) tender.setSubmissionDeadline(submissionDeadline);
-                    if (groupKey != null) tender.setGroupKey(groupKey);
-                    if (tender.getHasUnreadUpdate() == null) tender.setHasUnreadUpdate(false);
+                    // 2. Lekki wpis w przestrzeni roboczej użytkownika (user_tenders)
+                    boolean isNewForUser;
+                    if (effectiveUserId != null) {
+                        Optional<UserTender> existingUtOpt = userTenderRepository
+                                .findByUserIdAndTenderId(effectiveUserId, savedTender.getId());
+                        if (existingUtOpt.isEmpty()) {
+                            UserTender ut = new UserTender();
+                            ut.setUserId(effectiveUserId);
+                            ut.setTender(savedTender);
+                            ut.setStatus(TenderStatus.NEW);
+                            ut.setScore(evaluation.totalScore());
+                            ut.setScoreBreakdown(breakdownLine);
+                            ut.setHasUnreadUpdate(false);
+                            ut.setLastReadUpdateVersion(0);
+                            ut.setCreatedAt(nowPl);
+                            ut.setUpdatedAt(nowPl);
+                            userTenderRepository.save(ut);
+                            isNewForUser = true;
+                        } else {
+                            UserTender ut = existingUtOpt.get();
+                            // Zachowujemy status użytkownika (np. INTERESTED / DISCARDED nigdy nie wraca na NEW)
+                            if (ut.getStatus() != TenderStatus.INTERESTED) {
+                                ut.setScore(evaluation.totalScore());
+                                ut.setScoreBreakdown(breakdownLine);
+                                ut.setUpdatedAt(nowPl);
+                                userTenderRepository.save(ut);
+                            }
+                            isNewForUser = false;
+                        }
+                    } else {
+                        isNewForUser = isNewCatalogTender;
+                    }
 
-                    Tender savedTender = tenderRepository.save(tender);
                     if (savedTendersInRun.put(savedTender.getId(), savedTender) == null) {
                         savedCount++;
                         epSaved++;
-                        if (isNewTender) {
+                        if (isNewForUser) {
                             newSavedCount++;
                             epNewSaved++;
                         } else {
@@ -359,6 +434,7 @@ public class TenderExecutionService {
         run.setExcludedCount(excludedCount);
         run.setZeroScoreCount(zeroScoreSkippedCount);
         run.setCreatedAt(dateService.nowPoland());
+        run.setOwnerUserId(effectiveUserId);
         run.setTenders(new ArrayList<>(savedTendersInRun.values()));
         FetchRun savedRun = fetchRunRepository.save(run);
 

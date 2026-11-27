@@ -105,7 +105,14 @@ export default function ReportsRunsTable({
                       className="w-5 h-5 accent-blue-600 cursor-pointer"
                     />
                   </td>
-                  <td className="p-3.5 font-mono font-bold">#{r.id}</td>
+                  <td className="p-3.5 font-mono font-bold whitespace-nowrap">
+                    <span>#{r.id}</span>
+                    {r.isRead === false && (
+                      <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-red-600 text-white font-sans font-extrabold text-[10px]">
+                        NOWY
+                      </span>
+                    )}
+                  </td>
                   <td className="p-3.5 whitespace-nowrap">
                     {r.createdAt ? new Date(r.createdAt).toLocaleString('pl-PL') : '—'}
                   </td>

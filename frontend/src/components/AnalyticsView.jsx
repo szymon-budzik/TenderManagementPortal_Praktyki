@@ -17,6 +17,7 @@ import { getTenders } from '../services/tendersApi';
 import { getKeywordCategories } from '../services/keywordsApi';
 import { getSearchSources } from '../services/endpointsApi';
 import { getRuns } from '../services/automationApi';
+import { useAccessibleResources } from '../hooks/useAccessibleResources';
 
 export default function AnalyticsView() {
   const [tenders, setTenders] = useState([]);
@@ -24,6 +25,9 @@ export default function AnalyticsView() {
   const [endpoints, setEndpoints] = useState([]);
   const [runs, setRuns] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  const visibleCategories = useAccessibleResources('KEYWORDS', categories);
+  const visibleEndpoints = useAccessibleResources('ENDPOINTS', endpoints);
 
   const [rangePreset, setRangePreset] = useState('ALL');
   const [dateFrom, setDateFrom] = useState('');
@@ -77,8 +81,8 @@ export default function AnalyticsView() {
   );
 
   const bindingsData = useMemo(
-    () => computeBindingsData(filteredTenders, categories, endpoints, bindingMode),
-    [filteredTenders, categories, endpoints, bindingMode]
+    () => computeBindingsData(filteredTenders, visibleCategories, visibleEndpoints, bindingMode),
+    [filteredTenders, visibleCategories, visibleEndpoints, bindingMode]
   );
 
   const scoreBrackets = useMemo(() => computeScoreBrackets(filteredTenders), [filteredTenders]);

@@ -125,6 +125,8 @@ export default function SearchView() {
         categoryQuery: useCategoryQuery ? categoryQuery.trim() : null,
       });
       setRunResult(res.data);
+      window.dispatchEvent(new Event('reportsUpdated'));
+      window.dispatchEvent(new Event('observedUpdated'));
     } catch (err) {
       setSearchError(err?.response?.data?.message || 'Błąd uruchamiania pobierania.');
       console.error('Błąd uruchamiania pobierania:', err);
