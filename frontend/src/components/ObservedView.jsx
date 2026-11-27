@@ -181,7 +181,7 @@ export default function ObservedView() {
         success: true,
         text:
           data?.message ||
-          `Utworzono raport (#${data?.runId}) — jest już dostępny w zakładce Raporty.`,
+          `Utworzono raport (#${data?.userSeqNo ?? data?.runId}) — jest już dostępny w zakładce Raporty.`,
       });
       handleClearSelection();
       setReportName('');

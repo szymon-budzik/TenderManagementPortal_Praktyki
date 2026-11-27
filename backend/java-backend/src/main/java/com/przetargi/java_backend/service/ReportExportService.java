@@ -146,6 +146,7 @@ public class ReportExportService {
         run.setZeroScoreCount(0);
         run.setCreatedAt(dateService.nowPoland());
         run.setOwnerUserId(ownerUserId);
+        run.setUserSeqNo(fetchRunRepository.nextUserSeqNo(ownerUserId));
         run.setTenders(new ArrayList<>(selectedTenders));
         run.setTenderUpdates(new LinkedHashSet<>(selectedUpdates));
 
@@ -189,7 +190,7 @@ public class ReportExportService {
         Map<Long, Long> updateOwnerById = new HashMap<>();
 
         for (FetchRun run : runs) {
-            String label = "#" + run.getId() + " (" + run.getSourceType() + ")";
+            String label = "#" + run.getDisplayNumber() + " (" + run.getSourceType() + ")";
             Long runOwnerId = run.getOwnerUserId() != null ? run.getOwnerUserId() : run.getTargetUserId();
             if (run.getTenders() != null) {
                 for (Tender t : run.getTenders()) {

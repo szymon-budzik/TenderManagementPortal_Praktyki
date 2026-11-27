@@ -58,6 +58,9 @@ public class FetchRun {
     @Column(name = "owner_user_id")
     private Long ownerUserId;
 
+    @Column(name = "user_seq_no")
+    private Integer userSeqNo;
+
     @Column(name = "is_read", nullable = false)
     private Boolean isRead = false;
 
@@ -121,6 +124,13 @@ public class FetchRun {
 
     public Long getOwnerUserId() { return ownerUserId; }
     public void setOwnerUserId(Long ownerUserId) { this.ownerUserId = ownerUserId; }
+
+    public Integer getUserSeqNo() { return userSeqNo; }
+    public void setUserSeqNo(Integer userSeqNo) { this.userSeqNo = userSeqNo; }
+
+    public long getDisplayNumber() {
+        return userSeqNo != null ? userSeqNo.longValue() : (id != null ? id : 0L);
+    }
 
     public Boolean getIsRead() { return isRead; }
     public void setIsRead(Boolean isRead) { this.isRead = isRead; }

@@ -221,7 +221,7 @@ export default function SharedInboxView() {
         success: true,
         text:
           data?.message ||
-          `Utworzono raport (#${data?.runId}) — dostępny w zakładce Raporty.`,
+          `Utworzono raport (#${data?.userSeqNo ?? data?.runId}) — dostępny w zakładce Raporty.`,
       });
       setSelectedShareIds([]);
       setReportName('');

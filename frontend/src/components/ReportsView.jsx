@@ -21,6 +21,9 @@ import { useSort } from '../hooks/useSort';
 import { useConfirmDialog } from '../hooks/useConfirmDialog';
 import { usePolling } from '../hooks/usePolling';
 
+const getRunSortValue = (r, key) =>
+  key === 'userSeqNo' ? (r.userSeqNo ?? r.id ?? 0) : (r[key] ?? '');
+
 export default function ReportsView() {
   const [runs, setRuns] = useState([]);
   const [allSmtpAccounts, setAllSmtpAccounts] = useState([]);
@@ -34,7 +37,11 @@ export default function ReportsView() {
   const [savingNotifPref, setSavingNotifPref] = useState(false);
 
   const { confirmDialog, openConfirm, closeConfirm } = useConfirmDialog();
-  const { toggleSort, sortedItems: sortedRuns } = useSort(runs, { key: 'id', dir: 'desc' });
+  const { toggleSort, sortedItems: sortedRuns } = useSort(
+    runs,
+    { key: 'userSeqNo', dir: 'desc' },
+    getRunSortValue
+  );
 
   const smtpAccounts = useAccessibleResources(RESOURCE_TYPES.SMTP, allSmtpAccounts);
 
@@ -161,7 +168,7 @@ export default function ReportsView() {
   const confirmDeleteRun = (run) => {
     openConfirm({
       title: 'Usuń wpis z historii pobrań',
-      message: `Czy na pewno chcesz usunąć pobranie #${run.id} (${run.sourceType})?`,
+      message: `Czy na pewno chcesz usunąć pobranie #${run.userSeqNo ?? run.id} (${run.sourceType})?`,
       onConfirm: async () => {
         await deleteRun(run.id);
         setSelectedRunIds((prev) => prev.filter((item) => item !== run.id));

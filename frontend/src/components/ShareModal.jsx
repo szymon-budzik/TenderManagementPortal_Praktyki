@@ -22,6 +22,7 @@ function ShareModalInner({
   const [query, setQuery] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
+  const [infoNotice, setInfoNotice] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -66,14 +67,39 @@ function ShareModalInner({
     e.preventDefault();
     if (selectedRecipientIds.length === 0 || count === 0) return;
     setError('');
+    setInfoNotice('');
     setSending(true);
     try {
       const result = isReports
         ? await shareReportsToUsers(selectedRecipientIds, itemIds, note.trim())
         : await shareTendersToUsers(selectedRecipientIds, itemIds, note.trim());
+
+      const sharedCount = result?.sharedItemsCount ?? 0;
+      const skippedCount = result?.skippedCount ?? 0;
+
+      if (sharedCount === 0 && skippedCount > 0) {
+        setInfoNotice(
+          result?.message ||
+            `Wybrany odbiorca ma już te przetargi (pominięto duplikaty: ${skippedCount}).`
+        );
+        return;
+      }
+
       window.dispatchEvent(new Event('notificationsUpdated'));
       window.dispatchEvent(new Event('sharedUpdated'));
-      if (onShared) onShared(result);
+      if (isReports) {
+        window.dispatchEvent(new Event('reportsUpdated'));
+      }
+      if (onShared) {
+        const fallbackMsg =
+          skippedCount > 0
+            ? `Udostępniono ${sharedCount} pozycji, pominięto ${skippedCount} (odbiorca już je ma).`
+            : undefined;
+        onShared({
+          ...result,
+          message: result?.message || fallbackMsg,
+        });
+      }
       onClose();
     } catch (err) {
       setError(err?.response?.data?.message || 'Nie udało się przesłać wybranych pozycji.');
@@ -125,6 +151,13 @@ function ShareModalInner({
               <div className="p-3 bg-red-50 border border-red-500 rounded-xl text-xs font-bold text-black flex items-center gap-2">
                 <AlertCircle size={15} className="text-red-600 shrink-0" />
                 <span>{error}</span>
+              </div>
+            )}
+
+            {infoNotice && (
+              <div className="p-3 bg-amber-50 border-2 border-amber-500 rounded-xl text-xs font-extrabold text-black flex items-center gap-2">
+                <AlertCircle size={15} className="text-amber-700 shrink-0" />
+                <span>{infoNotice}</span>
               </div>
             )}
 

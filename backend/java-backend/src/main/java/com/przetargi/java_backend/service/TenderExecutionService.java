@@ -435,6 +435,7 @@ public class TenderExecutionService {
         run.setZeroScoreCount(zeroScoreSkippedCount);
         run.setCreatedAt(dateService.nowPoland());
         run.setOwnerUserId(effectiveUserId);
+        run.setUserSeqNo(fetchRunRepository.nextUserSeqNo(effectiveUserId));
         run.setTenders(new ArrayList<>(savedTendersInRun.values()));
         FetchRun savedRun = fetchRunRepository.save(run);
 

@@ -6,6 +6,7 @@ import java.time.OffsetDateTime;
 
 public record FetchRunDto(
         Long id,
+        Integer userSeqNo,
         String sourceType,
         String sourcesSummary,
         Integer totalFetched,
@@ -20,6 +21,7 @@ public record FetchRunDto(
     public static FetchRunDto fromEntity(FetchRun r) {
         return new FetchRunDto(
                 r.getId(),
+                r.getUserSeqNo(),
                 r.getSourceType(),
                 r.getSourcesSummary(),
                 r.getTotalFetched(),

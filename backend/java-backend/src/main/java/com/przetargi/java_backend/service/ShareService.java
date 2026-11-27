@@ -139,8 +139,15 @@ public class ShareService {
         OffsetDateTime nowPl = dateService.nowPoland();
 
         int totalCreated = 0;
+        int skippedCount = 0;
+        int notifiedRecipients = 0;
         for (Long recipientId : recipientIds) {
+            List<Tender> createdForRecipient = new ArrayList<>();
             for (Tender tender : tenders) {
+                if (sharedTenderRepository.existsByRecipientUserIdAndTenderId(recipientId, tender.getId())) {
+                    skippedCount++;
+                    continue;
+                }
                 SharedTender st = new SharedTender();
                 st.setTenderId(tender.getId());
                 st.setSenderUserId(sender.getId());
@@ -149,18 +156,24 @@ public class ShareService {
                 st.setIsRead(false);
                 st.setCreatedAt(nowPl);
                 sharedTenderRepository.save(st);
+                createdForRecipient.add(tender);
                 totalCreated++;
             }
 
-            String title = tenders.size() == 1
+            if (createdForRecipient.isEmpty()) {
+                continue;
+            }
+            notifiedRecipients++;
+
+            String title = createdForRecipient.size() == 1
                     ? "Przesłano przetarg od " + sender.getUsername()
-                    : "Przesłano " + tenders.size() + " przetargów od " + sender.getUsername();
+                    : "Przesłano " + createdForRecipient.size() + " przetargów od " + sender.getUsername();
 
             String summary;
-            if (tenders.size() == 1) {
-                summary = truncate(tenders.get(0).getTitle(), 140);
+            if (createdForRecipient.size() == 1) {
+                summary = truncate(createdForRecipient.get(0).getTitle(), 140);
             } else {
-                summary = "Otrzymano " + tenders.size() + " przetargów w zakładce Przesłane.";
+                summary = "Otrzymano " + createdForRecipient.size() + " przetargów w zakładce Przesłane.";
             }
             if (note != null) {
                 summary = summary + " • Wiadomość: " + truncate(note, 120);
@@ -172,7 +185,7 @@ public class ShareService {
                 details.append("Wiadomość: ").append(note).append("\n");
             }
             details.append("\nPrzesłane przetargi:\n");
-            for (Tender t : tenders) {
+            for (Tender t : createdForRecipient) {
                 details.append("• [").append(t.getExternalId()).append("] ")
                         .append(t.getTitle()).append("\n");
             }
@@ -188,8 +201,18 @@ public class ShareService {
             );
         }
 
-        String msg = "Przesłano " + tenders.size() + " przetarg(ów) do " + recipientIds.size() + " użytkownik(ów).";
-        return new ShareActionResultDto(totalCreated, recipientIds.size(), msg);
+        String msg;
+        if (totalCreated == 0 && skippedCount > 0) {
+            msg = recipientIds.size() == 1
+                    ? "Odbiorca już ma wybrane przetargi (pominięto: " + skippedCount + ")."
+                    : "Wszyscy wybrani odbiorcy już mają wybrane przetargi (pominięto: " + skippedCount + ").";
+        } else if (skippedCount > 0) {
+            msg = "Udostępniono " + totalCreated + " przetarg(ów), pominięto " + skippedCount
+                    + " (odbiorca już je posiada).";
+        } else {
+            msg = "Przesłano " + tenders.size() + " przetarg(ów) do " + notifiedRecipients + " użytkownik(ów).";
+        }
+        return new ShareActionResultDto(totalCreated, skippedCount, notifiedRecipients, msg);
     }
 
     @Transactional
@@ -274,6 +297,7 @@ public class ShareService {
         run.setZeroScoreCount(0);
         run.setCreatedAt(dateService.nowPoland());
         run.setOwnerUserId(currentUser.getId());
+        run.setUserSeqNo(fetchRunRepository.nextUserSeqNo(currentUser.getId()));
         run.setTargetUserId(currentUser.getId());
         run.setSharedByUsername(senderNames.size() == 1 ? senderNames.get(0) : String.join(", ", senderNames));
         run.setTenders(new ArrayList<>(tenders));
@@ -282,9 +306,10 @@ public class ShareService {
         FetchRun saved = fetchRunRepository.save(run);
         return new CreatedReportDto(
                 saved.getId(),
+                saved.getUserSeqNo(),
                 saved.getSourceType(),
                 tenders.size(),
-                "Utworzono raport (#" + saved.getId() + ") w zakładce Raporty."
+                "Utworzono raport (#" + saved.getDisplayNumber() + ") w zakładce Raporty."
         );
     }
 
@@ -325,6 +350,7 @@ public class ShareService {
 
         int totalCreated = 0;
         for (Long recipientId : recipientIds) {
+            int nextSeq = fetchRunRepository.nextUserSeqNo(recipientId);
             for (FetchRun src : sourceRuns) {
                 FetchRun copy = new FetchRun();
                 copy.setSourceType("PRZESŁANE [od: " + truncate(sender.getUsername(), 90) + "]");
@@ -338,6 +364,7 @@ public class ShareService {
                 copy.setZeroScoreCount(src.getZeroScoreCount());
                 copy.setCreatedAt(nowPl);
                 copy.setOwnerUserId(recipientId);
+                copy.setUserSeqNo(nextSeq++);
                 copy.setTargetUserId(recipientId);
                 copy.setSharedByUsername(sender.getUsername());
                 copy.setSharedNote(note);
@@ -365,7 +392,7 @@ public class ShareService {
             }
             details.append("\nPrzesłane raporty:\n");
             for (FetchRun r : sourceRuns) {
-                details.append("• #").append(r.getId())
+                details.append("• #").append(r.getDisplayNumber())
                         .append(" (").append(r.getSourceType()).append(") — ")
                         .append(r.getSavedCount()).append(" zapisanych\n");
             }

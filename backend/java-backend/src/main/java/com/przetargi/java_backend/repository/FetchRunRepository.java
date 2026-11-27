@@ -19,4 +19,15 @@ public interface FetchRunRepository extends JpaRepository<FetchRun, Long> {
 
     @Query("SELECT r FROM FetchRun r WHERE (r.ownerUserId = :userId OR r.targetUserId = :userId) AND r.isRead = false")
     List<FetchRun> findUnreadAccessibleByUser(@Param("userId") Long userId);
+
+    @Query("SELECT COALESCE(MAX(r.userSeqNo), 0) FROM FetchRun r WHERE r.ownerUserId = :ownerUserId")
+    Integer findMaxUserSeqNoByOwnerUserId(@Param("ownerUserId") Long ownerUserId);
+
+    default int nextUserSeqNo(Long ownerUserId) {
+        if (ownerUserId == null) {
+            return 1;
+        }
+        Integer max = findMaxUserSeqNoByOwnerUserId(ownerUserId);
+        return (max != null ? max : 0) + 1;
+    }
 }

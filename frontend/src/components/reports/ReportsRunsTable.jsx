@@ -14,11 +14,11 @@ export default function ReportsRunsTable({
           <tr className="bg-blue-600 text-white select-none">
             <th className="p-3.5 font-bold w-12 text-center">Wybór</th>
             <th
-              onClick={() => onToggleSort('id')}
+              onClick={() => onToggleSort('userSeqNo')}
               className="p-3.5 font-bold cursor-pointer hover:bg-blue-700"
             >
               <div className="inline-flex items-center gap-1">
-                ID Pob. <ArrowUpDown size={14} />
+                Nr <ArrowUpDown size={14} />
               </div>
             </th>
             <th
@@ -106,7 +106,7 @@ export default function ReportsRunsTable({
                     />
                   </td>
                   <td className="p-3.5 font-mono font-bold whitespace-nowrap">
-                    <span>#{r.id}</span>
+                    <span>#{r.userSeqNo ?? r.id}</span>
                     {r.isRead === false && (
                       <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-red-600 text-white font-sans font-extrabold text-[10px]">
                         NOWY

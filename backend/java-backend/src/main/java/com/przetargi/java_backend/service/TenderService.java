@@ -182,9 +182,10 @@ public class TenderService {
         FetchRun run = reportExportService.createReportFromObserved(tenderIds, updateIds, reportName, userId);
         return new CreatedReportDto(
                 run.getId(),
+                run.getUserSeqNo(),
                 run.getSourceType(),
                 run.getSavedCount(),
-                "Utworzono raport #" + run.getId() + " (" + run.getSavedCount() + " poz.) — jest już dostępny w zakładce Raporty."
+                "Utworzono raport #" + run.getDisplayNumber() + " (" + run.getSavedCount() + " poz.) — jest już dostępny w zakładce Raporty."
         );
     }
 
